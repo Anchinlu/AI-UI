@@ -50,14 +50,7 @@ export function AiOrbPanel({
 
   const [isVisible, setIsVisible] = useState(true);
 
-  const handleOrbClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (isRadialOpen) return;
-    
-    if (onOrbClick) {
-      onOrbClick();
-    }
-  };
+
 
   useEffect(() => {
     const handleVis = (e: Event) => {
@@ -170,10 +163,29 @@ export function AiOrbPanel({
     };
   });
 
+  const [ripples, setRipples] = useState<{id: number, x: number, y: number}[]>([]);
+
+  const onPanelClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRadialOpen) return;
+
+    // Add ripple
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    setRipples(prev => {
+      const newRipples = [...prev, { id: Date.now() + Math.random(), x, y }];
+      return newRipples.slice(-3); // Keep max 3 ripples
+    });
+
+    if (onOrbClick) onOrbClick();
+  };
+
   return (
     <div 
       className={`ai-orb-panel ${isRadialOpen ? 'radial-open' : ''}`}
-      onClick={handleOrbClick}
+      onClick={onPanelClick}
       title={`Current State: ${aiState}. Click to toggle input.`}
     >
       <svg ref={svgRef} width="80" height="80" viewBox="0 0 80 80" className="ai-orb-svg">
@@ -183,6 +195,21 @@ export function AiOrbPanel({
             <stop offset="100%" stopColor="rgba(255, 255, 255, 0)" />
           </radialGradient>
         </defs>
+
+        {/* Ripples */}
+        <g className="ripples" pointerEvents="none">
+          {ripples.map(r => (
+            <circle 
+              key={r.id} 
+              cx={r.x} 
+              cy={r.y} 
+              className="orb-ripple"
+              onAnimationEnd={() => {
+                setRipples(prev => prev.filter(rip => rip.id !== r.id));
+              }}
+            />
+          ))}
+        </g>
         
         {/* Rays shooting outwards */}
         <g className={`core-rays ${aiState}`}>

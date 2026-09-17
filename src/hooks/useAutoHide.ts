@@ -68,7 +68,15 @@ export function useAutoHide(barRef: React.RefObject<HTMLDivElement | null>) {
     
     el.style.transform = `scaleX(${squashX}) scaleY(${stretchY}) translateY(${values.translateY || 0}px)`;
     el.style.opacity = `${Math.max(0, Math.min(1, values.opacity))}`;
-    el.style.borderRadius = `0 0 ${values.bottomRadius}px ${values.bottomRadius}px`;
+    
+    const svgPaths = el.querySelectorAll('.silhouette-path');
+    svgPaths.forEach(svgPath => {
+      const w = parseFloat(el.style.width) || 440;
+      const h = parseFloat(el.style.height) || 80;
+      const rawR = values.bottomRadius || 28;
+      const r = Math.min(rawR, w / 2);
+      svgPath.setAttribute('d', `M 0,0 A 32,32 0 0,1 32,32 L 32,${h - r} A ${r},${r} 0 0,0 ${32 + r},${h} L ${32 + w - r},${h} A ${r},${r} 0 0,0 ${32 + w},${h - r} L ${32 + w},32 A 32,32 0 0,1 ${64 + w},0 Z`);
+    });
     
     const content = el.querySelector('.taskbar-content') as HTMLElement;
     if (content) {

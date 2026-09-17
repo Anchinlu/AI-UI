@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAutoHide } from '../hooks/useAutoHide';
 import { DateTimeWidget } from './DateTimeWidget';
+import { LiquidSlider } from './LiquidSlider';
 import { AiOrbPanel, type AiState } from './AiOrbPanel';
 import { 
   Volume2, 
@@ -41,14 +42,22 @@ export function TaskbarShell() {
   // === AI Prompt State ===
   const [aiState, setAiState] = useState<AiState>('idle');
   const [prompt, setPrompt] = useState('');
-  const [resultText, setResultText] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
+
+  // === Conversation History (H2) ===
+  type ChatRole = 'user' | 'assistant';
+  type ConversationMessage = { id: string; role: ChatRole; content: string };
+  const [committedMessages, setCommittedMessages] = useState<ConversationMessage[]>([]);
+  const pendingTurnRef = useRef<{ requestId: string; userContent: string; assistantContent: string } | null>(null);
+  const [streamingText, setStreamingText] = useState<string>('');
 
   useEffect(() => {
     if (currentMode !== 'ai-input' && activeRequestId.current) {
       invoke('ai_stop', { requestId: activeRequestId.current }).catch(console.error);
       activeRequestId.current = null;
+      pendingTurnRef.current = null;
+      setStreamingText('');
       setAiState('idle');
     }
   }, [currentMode]);
@@ -57,14 +66,16 @@ export function TaskbarShell() {
     if (currentMode === 'radial' || currentMode === 'dragging') return;
 
     if (currentMode !== 'ai-input') {
-      stopAnimation(); // Dừng spring physics
-      setIsLocked(true); // Khóa auto-hide
+      stopAnimation();
+      setIsLocked(true);
       
-      // Mở rộng cửa sổ TRƯỚC
+      // Reset transient AI state, keep conversation history
+      setAiState('idle');
+      setErrorMsg(null);
+      setStreamingText('');
+      
       await invoke('expand_window', { height: 400 }).catch(console.error);
       invoke('set_interaction_mode', { mode: 'radial' }).catch(console.error);
-      
-      // Hiện prompt SAU KHI cửa sổ đã to
       setCurrentMode('ai-input');
     } else {
       // Đóng AI Prompt
@@ -75,31 +86,58 @@ export function TaskbarShell() {
     }
   };
 
+  const clearConversation = () => {
+    if (activeRequestId.current) {
+      invoke('ai_stop', { requestId: activeRequestId.current }).catch(console.error);
+      activeRequestId.current = null;
+    }
+    pendingTurnRef.current = null;
+    setCommittedMessages([]);
+    setStreamingText('');
+    setErrorMsg(null);
+    setAiState('idle');
+  };
+
   const handleAiKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && prompt.trim() !== '') {
       e.preventDefault();
       
+      // Stop existing request and discard pending turn
       if (activeRequestId.current) {
         invoke('ai_stop', { requestId: activeRequestId.current }).catch(console.error);
+        pendingTurnRef.current = null;
+        setStreamingText('');
       }
 
       const reqId = crypto.randomUUID();
       activeRequestId.current = reqId;
+      const userContent = prompt.trim();
+
+      // Build messages: committed history + new user message
+      const requestMessages = [
+        ...committedMessages.map(m => ({ role: m.role, content: m.content })),
+        { role: 'user', content: userContent }
+      ];
+
+      // Set pending turn
+      pendingTurnRef.current = { requestId: reqId, userContent, assistantContent: '' };
 
       setAiState('thinking');
       setErrorMsg(null);
-      setResultText(''); // Initialize empty for stream
+      setStreamingText('');
+      setPrompt('');
 
       try {
         await invoke('ai_stream', { 
-          prompt, 
+          messages: requestMessages, 
           params: { request_id: reqId, stream: true } 
         });
-        setPrompt('');
       } catch (err) {
         if (activeRequestId.current === reqId) {
           setErrorMsg(String(err));
           setAiState('error');
+          pendingTurnRef.current = null;
+          setStreamingText('');
         }
       }
     }
@@ -111,11 +149,26 @@ export function TaskbarShell() {
       if (request_id !== activeRequestId.current) return;
 
       setAiState('speaking');
-      setResultText(prev => (prev || '') + text);
+      
+      if (pendingTurnRef.current && pendingTurnRef.current.requestId === request_id) {
+        pendingTurnRef.current.assistantContent += text;
+        setStreamingText(pendingTurnRef.current.assistantContent);
+      }
       
       if (done) {
+        // Commit the turn to history
+        if (pendingTurnRef.current && pendingTurnRef.current.requestId === request_id) {
+          const pt = pendingTurnRef.current;
+          setCommittedMessages(prev => [
+            ...prev,
+            { id: crypto.randomUUID(), role: 'user' as ChatRole, content: pt.userContent },
+            { id: crypto.randomUUID(), role: 'assistant' as ChatRole, content: pt.assistantContent },
+          ]);
+          pendingTurnRef.current = null;
+          setStreamingText('');
+        }
         activeRequestId.current = null;
-        setTimeout(() => setAiState('idle'), 5000);
+        setTimeout(() => setAiState('idle'), 500);
       }
     });
 
@@ -126,6 +179,9 @@ export function TaskbarShell() {
       setErrorMsg(error);
       setAiState('error');
       activeRequestId.current = null;
+      // Discard pending turn on error
+      pendingTurnRef.current = null;
+      setStreamingText('');
     });
 
     return () => {
@@ -505,7 +561,9 @@ export function TaskbarShell() {
 
     pointerActiveRef.current = true;
     pointerIdRef.current = e.pointerId;
-    startYRef.current = e.clientY - (currentMode === 'radial' ? 0 : dragY);
+    // When in radial mode, the visual state corresponds to dragY = 120.
+    // Setting this correctly ensures smooth dragging back up to 0.
+    startYRef.current = e.clientY - (currentMode === 'radial' ? 120 : dragY);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -538,7 +596,7 @@ export function TaskbarShell() {
     
     if (currentMode !== 'dragging') return;
     
-    if (dragY >= 0 && dyRaw >= 0) { // dragging down
+    if (dyRaw >= 0) { // dragging down
       const dy = Math.max(0, dyRaw);
       setDragY(dy);
       
@@ -546,19 +604,30 @@ export function TaskbarShell() {
         barRef.current.style.transition = 'none';
         const squashW = Math.max(160, 440 - dy * 0.8);
         const stretchH = 80 + dy;
-        const radius = 28 + dy * 1.5;
+        const rawRadius = 28 + dy * 1.5;
+        const radius = Math.min(rawRadius, squashW / 2);
         
         barRef.current.style.transform = `translateY(0px)`; 
         barRef.current.style.width = `${squashW}px`;
         barRef.current.style.height = `${stretchH}px`;
-        barRef.current.style.borderRadius = `0 0 ${radius}px ${radius}px`;
+        
+        const svgPaths = barRef.current.querySelectorAll('.silhouette-path');
+        svgPaths.forEach(svgPath => {
+          (svgPath as HTMLElement).style.transition = 'none';
+          const w = squashW;
+          const h = stretchH;
+          const r = radius;
+          svgPath.setAttribute('d', `M 0,0 A 32,32 0 0,1 32,32 L 32,${h - r} A ${r},${r} 0 0,0 ${32 + r},${h} L ${32 + w - r},${h} A ${r},${r} 0 0,0 ${32 + w},${h - r} L ${32 + w},32 A 32,32 0 0,1 ${64 + w},0 Z`);
+        });
         
         const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
         if (content) {
+          content.style.transition = 'none';
           const progress = Math.min(1, dy / 80);
           
           const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
           if (orb) {
+            orb.style.transition = 'none';
             const targetLeft = (squashW - 80) / 2;
             const currentLeft = 24 + (targetLeft - 24) * progress;
             orb.style.left = `${currentLeft}px`;
@@ -566,6 +635,7 @@ export function TaskbarShell() {
           
           const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
           if (dateTime) {
+            dateTime.style.transition = 'none';
             dateTime.style.opacity = `${1 - progress * 1.5}`;
             dateTime.style.transform = `scale(${1 - progress * 0.5})`;
             dateTime.style.pointerEvents = progress > 0.1 ? 'none' : 'auto';
@@ -573,12 +643,38 @@ export function TaskbarShell() {
         }
       }
     } else { // dragging up
-      const dy = Math.min(0, dyRaw);
+      const dy = Math.max(-60, dyRaw); // Prevent dragging too far up
       setDragY(dy);
       
       if (barRef.current) {
         barRef.current.style.transition = 'none';
-        barRef.current.style.transform = `translateY(${dy}px)`;
+        barRef.current.style.transform = `translateY(0px)`; // anchor at top
+        
+        // Pushing against ceiling animation (dy is negative)
+        const flattenW = 440 + Math.abs(dy) * 1.5;
+        const rawRadius = Math.max(0, 28 - Math.abs(dy) * 0.5);
+        const radius = Math.min(rawRadius, flattenW / 2);
+        const flattenH = Math.max(32 + radius, 80 - Math.abs(dy));
+        
+        barRef.current.style.width = `${flattenW}px`;
+        barRef.current.style.height = `${flattenH}px`;
+        
+        const svgPaths = barRef.current.querySelectorAll('.silhouette-path');
+        svgPaths.forEach(svgPath => {
+          (svgPath as HTMLElement).style.transition = 'none';
+          const w = flattenW;
+          const h = flattenH;
+          const r = radius;
+          svgPath.setAttribute('d', `M 0,0 A 32,32 0 0,1 32,32 L 32,${h - r} A ${r},${r} 0 0,0 ${32 + r},${h} L ${32 + w - r},${h} A ${r},${r} 0 0,0 ${32 + w},${h - r} L ${32 + w},32 A 32,32 0 0,1 ${64 + w},0 Z`);
+        });
+        
+        const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
+        if (content) {
+          content.style.transition = 'none';
+          const progress = Math.min(1, Math.abs(dy) / 60);
+          content.style.opacity = `${1 - progress}`;
+          content.style.transform = `scale(${1 - progress * 0.2})`;
+        }
       }
     }
   };
@@ -602,6 +698,8 @@ export function TaskbarShell() {
     
     if (barRef.current) {
       barRef.current.style.transition = 'transform 0.35s ease, opacity 0.25s ease, width 0.35s ease, height 0.35s ease, border-radius 0.35s ease';
+      const svgPaths = barRef.current.querySelectorAll('.silhouette-path');
+      svgPaths.forEach(p => (p as HTMLElement).style.transition = 'd 0.35s ease');
     }
     
     let shouldOpen = false;
@@ -624,18 +722,31 @@ export function TaskbarShell() {
         barRef.current.style.transform = `translateY(0px)`;
         barRef.current.style.width = `440px`;
         barRef.current.style.height = `80px`;
-        barRef.current.style.borderRadius = `0 0 28px 28px`;
-        barRef.current.style.background = '#000000';
-        barRef.current.style.border = '1px solid rgba(255, 255, 255, 0.08)';
-        barRef.current.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)';
+        barRef.current.style.borderRadius = `0`;
+        barRef.current.style.background = 'transparent';
+        barRef.current.style.border = 'none';
+        barRef.current.style.boxShadow = 'none';
+        
+        const svgPaths = barRef.current.querySelectorAll('.silhouette-path');
+        svgPaths.forEach(svgPath => {
+          svgPath.setAttribute('d', `M 0,0 A 32,32 0 0,1 32,32 L 32,52 A 28,28 0 0,0 60,80 L 444,80 A 28,28 0 0,0 472,52 L 472,32 A 32,32 0 0,1 504,0 Z`);
+        });
         
         const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
         if (content) {
+          content.style.transition = 'transform 0.35s ease, opacity 0.25s ease';
+          content.style.opacity = '1';
+          content.style.transform = 'scale(1)';
+          
           const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
-          if (orb) orb.style.left = `24px`;
+          if (orb) {
+            orb.style.transition = 'left 0.35s ease';
+            orb.style.left = `24px`;
+          }
           
           const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
           if (dateTime) {
+            dateTime.style.transition = 'opacity 0.25s ease, transform 0.35s ease';
             dateTime.style.opacity = `1`;
             dateTime.style.transform = `scale(1)`;
             dateTime.style.pointerEvents = 'auto';
@@ -688,13 +799,13 @@ export function TaskbarShell() {
             )}
             <div className="control-row">
               <label>Volume</label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={audioStatus?.volume ?? 50}
-                onChange={(e) => handleVolumeChange(Number(e.target.value))}
-              />
+              <div style={{ flex: 1, padding: '0 8px' }}>
+                <LiquidSlider 
+                  value={audioStatus?.volume ?? 50}
+                  onChange={handleVolumeChange}
+                  ariaLabel="Volume"
+                />
+              </div>
               <span style={{ minWidth: '32px', textAlign: 'right', fontSize: '12px' }}>{audioStatus?.volume ?? '—'}%</span>
             </div>
             <div className="control-row">
@@ -743,13 +854,13 @@ export function TaskbarShell() {
                 <label>Brightness</label>
                 {activeMonitor.supports_brightness ? (
                   <>
-                    <input 
-                      type="range" 
-                      min="0" 
-                      max="100" 
-                      value={activeMonitor.brightness ?? 0}
-                      onChange={(e) => handleBrightnessChange(activeMonitor.id, Number(e.target.value))}
-                    />
+                    <div style={{ flex: 1, padding: '0 8px' }}>
+                      <LiquidSlider 
+                        value={activeMonitor.brightness ?? 0}
+                        onChange={(newVal) => handleBrightnessChange(activeMonitor.id, newVal)}
+                        ariaLabel="Brightness"
+                      />
+                    </div>
                     <span style={{ minWidth: '32px', textAlign: 'right', fontSize: '12px' }}>
                       {activeMonitor.brightness ?? '—'}%
                     </span>
@@ -860,13 +971,35 @@ export function TaskbarShell() {
       >
         {!isRadialOpen && (
           <>
-            <div className="taskbar-curve-left" />
-            <div className="taskbar-curve-right" />
+            <svg 
+              className="taskbar-silhouette" 
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <defs>
+                <mask id="laser-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">
+                  <path 
+                    className="silhouette-path" 
+                    fill="none" 
+                    stroke="white"
+                    strokeWidth="3"
+                    d="M 0,0 A 32,32 0 0,1 32,32 L 32,52 A 28,28 0 0,0 60,80 L 444,80 A 28,28 0 0,0 472,52 L 472,32 A 32,32 0 0,1 504,0 Z"
+                  />
+                </mask>
+              </defs>
+              <path 
+                className="silhouette-path" 
+                fill="#000000" 
+                stroke="rgba(255, 255, 255, 0.08)"
+                strokeWidth="1"
+                d="M 0,0 A 32,32 0 0,1 32,32 L 32,52 A 28,28 0 0,0 60,80 L 444,80 A 28,28 0 0,0 472,52 L 472,32 A 32,32 0 0,1 504,0 Z"
+              />
+              <foreignObject width="100%" height="100%" mask="url(#laser-mask)">
+                <div className="taskbar-laser-container">
+                  <div className="taskbar-laser" />
+                </div>
+              </foreignObject>
+            </svg>
             <div className="taskbar-glass-layer" />
-            <div className="taskbar-laser-container">
-              <div className="taskbar-laser" />
-              <div className="taskbar-laser-cover" />
-            </div>
           </>
         )}
 
@@ -879,39 +1012,74 @@ export function TaskbarShell() {
 
           {isInputOpen && !isRadialOpen && (
             <div className="ai-prompt-popup" onClick={e => e.stopPropagation()}>
-              {aiState === 'idle' ? (
-                <div style={{ display: 'flex', width: '100%', alignItems: 'center' }}>
-                  <input 
-                    type="text"
-                    className="ai-prompt-input"
-                    value={prompt}
-                    onChange={e => setPrompt(e.target.value)}
-                    onKeyDown={handleAiKeyDown}
-                    autoFocus
-                    style={{ flex: 1 }}
-                  />
-                  <button 
-                    onClick={handleOrbClick}
-                    style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 8px', fontSize: '14px', marginLeft: '4px' }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', width: '100%', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, padding: '4px' }}>
-                    {aiState === 'thinking' && <div className="ai-spinner"></div>}
-                    {errorMsg && <div className="ai-error-text" style={{ color: '#ff6b6b' }}>⚠ {errorMsg}</div>}
-                    {(aiState === 'speaking' || resultText) && <div className="ai-result-text">{resultText}</div>}
-                  </div>
-                  <button 
-                    onClick={handleOrbClick}
-                    style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 8px', fontSize: '14px', marginLeft: '4px' }}
-                  >
-                    ✕
-                  </button>
+              {/* Conversation History */}
+              {committedMessages.length > 0 && (
+                <div style={{ maxHeight: '200px', overflowY: 'auto', marginBottom: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {committedMessages.map(msg => (
+                    <div key={msg.id} style={{
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      lineHeight: '1.4',
+                      background: msg.role === 'user' ? 'rgba(66, 133, 244, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                      color: '#fff',
+                      alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                      maxWidth: '90%',
+                      wordWrap: 'break-word',
+                      whiteSpace: 'pre-wrap',
+                    }}>
+                      {msg.content}
+                    </div>
+                  ))}
                 </div>
               )}
+
+              {/* Streaming / Error / Thinking */}
+              {aiState !== 'idle' && (
+                <div style={{ padding: '4px', marginBottom: '4px' }}>
+                  {aiState === 'thinking' && <div className="ai-spinner"></div>}
+                  {errorMsg && <div className="ai-error-text" style={{ color: '#ff6b6b' }}>⚠ {errorMsg}</div>}
+                  {aiState === 'speaking' && streamingText && (
+                    <div className="ai-result-text" style={{
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      whiteSpace: 'pre-wrap',
+                      wordWrap: 'break-word',
+                    }}>{streamingText}</div>
+                  )}
+                </div>
+              )}
+
+              {/* Input Row */}
+              <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: '4px' }}>
+                <input 
+                  type="text"
+                  className="ai-prompt-input"
+                  placeholder={committedMessages.length > 0 ? 'Tiếp tục hội thoại...' : 'Hỏi AI...'}
+                  value={prompt}
+                  onChange={e => setPrompt(e.target.value)}
+                  onKeyDown={handleAiKeyDown}
+                  autoFocus
+                  disabled={aiState === 'thinking' || aiState === 'speaking'}
+                  style={{ flex: 1 }}
+                />
+                {committedMessages.length > 0 && (
+                  <button 
+                    onClick={clearConversation}
+                    title="Xoá hội thoại"
+                    style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 4px', fontSize: '12px' }}
+                  >
+                    🗑
+                  </button>
+                )}
+                <button 
+                  onClick={handleOrbClick}
+                  style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 8px', fontSize: '14px' }}
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           )}
           
@@ -921,6 +1089,8 @@ export function TaskbarShell() {
             </div>
           )}
           
+
+
           {/* Orbital Satellites */}
           {isRadialOpen && (
             <div className="radial-orbitals-container" style={{ transformStyle: 'preserve-3d' }}>

@@ -32,14 +32,11 @@
   background: #000000;
   
   /* Removed top border to attach seamlessly to screen */
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-top: none;
-  border-radius: 0 0 28px 28px;
-  
-  /* Clean depth shadow */
-  box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.5),
-    0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Border and drop-shadow are now handled by the SVG silhouette */
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   
   /* Compositor hints */
   will-change: transform, opacity;
@@ -62,29 +59,17 @@
   -webkit-backdrop-filter: none !important;
 }
 
-/* === Outward curves (Fillets) === */
-.taskbar-curve-left,
-.taskbar-curve-right {
+/* === SVG Silhouette === */
+.taskbar-silhouette {
   position: absolute;
   top: 0;
-  width: 32px;
-  height: 32px;
-  background: #000000;
-  pointer-events: none;
-}
-
-.taskbar-curve-left {
   left: -32px;
-  /* Mask out the bottom-left to leave a top-right inward curve */
-  mask-image: radial-gradient(circle at 0% 100%, transparent 32px, black 32.5px);
-  -webkit-mask-image: radial-gradient(circle at 0% 100%, transparent 32px, black 32.5px);
-}
-
-.taskbar-curve-right {
-  right: -32px;
-  /* Mask out the bottom-right to leave a top-left inward curve */
-  mask-image: radial-gradient(circle at 100% 100%, transparent 32px, black 32.5px);
-  -webkit-mask-image: radial-gradient(circle at 100% 100%, transparent 32px, black 32.5px);
+  width: calc(100% + 64px);
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  /* Clean depth shadow mapped to the SVG path */
+  filter: drop-shadow(0 12px 32px rgba(0, 0, 0, 0.5)) drop-shadow(0 2px 8px rgba(0, 0, 0, 0.3));
 }
 
 /* === Inner highlight layer (subtle edge lighting) === */
@@ -120,11 +105,10 @@
 
 /* === Laser Sweep Effect (Border Glow) === */
 .taskbar-laser-container {
-  position: absolute;
-  inset: -1px; 
-  border-radius: inherit;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
-  z-index: 0; 
+  z-index: 10;
   overflow: hidden;
 }
 
@@ -143,13 +127,7 @@
   animation: laser-spin 2s linear infinite;
 }
 
-.taskbar-laser-cover {
-  position: absolute;
-  inset: 1.5px;
-  border-radius: inherit;
-  background: #000000;
-  z-index: 1;
-}
+/* laser-cover is no longer needed as we use SVG mask */
 
 @keyframes laser-spin {
   0% { transform: rotate(0deg); }

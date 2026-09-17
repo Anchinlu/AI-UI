@@ -209,16 +209,53 @@ struct OllamaModel {
     name: String,
 }
 
-#[derive(serde::Serialize)]
-struct OllamaGenerateRequest {
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct AiChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct OllamaChatOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_predict: Option<u32>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct OllamaChatRequest {
     model: String,
-    prompt: String,
+    messages: Vec<AiChatMessage>,
     stream: bool,
+    options: OllamaChatOptions,
 }
 
 #[derive(serde::Deserialize)]
-struct OllamaGenerateResponse {
-    response: String,
+struct OllamaChatResponseMessage {
+    content: String,
+}
+
+#[derive(serde::Deserialize)]
+struct OllamaChatResponse {
+    message: OllamaChatResponseMessage,
+}
+
+/// Validates message roles and prepends a neutral system message.
+fn build_ollama_messages(history: Vec<AiChatMessage>) -> Result<Vec<AiChatMessage>, String> {
+    for msg in &history {
+        if msg.role != "user" && msg.role != "assistant" {
+            return Err(format!("Role không hợp lệ: '{}'. Chỉ chấp nhận 'user' hoặc 'assistant'.", msg.role));
+        }
+    }
+    let mut messages = vec![
+        AiChatMessage {
+            role: "system".to_string(),
+            content: "You are a helpful assistant.".to_string(),
+        },
+    ];
+    messages.extend(history);
+    Ok(messages)
 }
 
 /// Checks the status of the local AI server
@@ -261,21 +298,26 @@ pub async fn ai_get_status(state: tauri::State<'_, crate::ai_task_manager::AiTas
 
 /// Generates a complete text response (blocking until done)
 #[command]
-pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, prompt: String, _params: AiGenerateParams) -> Result<String, String> {
+pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, messages: Vec<AiChatMessage>, params: AiGenerateParams) -> Result<String, String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
+    let ollama_messages = build_ollama_messages(messages)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
 
-    let req_body = OllamaGenerateRequest {
+    let req_body = OllamaChatRequest {
         model: get_model_name(),
-        prompt,
+        messages: ollama_messages,
         stream: false,
+        options: OllamaChatOptions {
+            temperature: params.temperature,
+            num_predict: params.max_tokens,
+        },
     };
 
-    let res = client.post(format!("{}/api/generate", ollama_url))
+    let res = client.post(format!("{}/api/chat", ollama_url))
         .json(&req_body)
         .send()
         .await
@@ -285,21 +327,22 @@ pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskM
         return Err(format!("Lỗi HTTP từ Ollama: {}", res.status()));
     }
 
-    let gen_res: OllamaGenerateResponse = res.json()
+    let chat_res: OllamaChatResponse = res.json()
         .await
-        .map_err(|e| format!("Lỗi parse kết quả JSON: {}", e))?;
+        .map_err(|e| format!("Lỗi parse kết quả JSON (expected message.content): {}", e))?;
 
-    Ok(gen_res.response)
+    Ok(chat_res.message.content)
 }
 
 #[command]
 pub async fn ai_stream(
     window: tauri::Window, 
     state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, 
-    prompt: String, 
+    messages: Vec<AiChatMessage>, 
     params: AiGenerateParams
 ) -> Result<(), String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
+    let ollama_messages = build_ollama_messages(messages)?;
     let req_id = params.request_id.clone();
 
     // Generate a new generation token for this request
@@ -322,10 +365,14 @@ pub async fn ai_stream(
         .build()
         .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
 
-    let req_body = OllamaGenerateRequest {
+    let req_body = OllamaChatRequest {
         model: get_model_name(),
-        prompt,
+        messages: ollama_messages,
         stream: true,
+        options: OllamaChatOptions {
+            temperature: params.temperature,
+            num_predict: params.max_tokens,
+        },
     };
 
     let tasks_clone = state.tasks.clone();
@@ -336,8 +383,16 @@ pub async fn ai_stream(
     
     let handle = tauri::async_runtime::spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
-        match client.post(format!("{}/api/generate", ollama_url)).json(&req_body).send().await {
+        match client.post(format!("{}/api/chat", ollama_url)).json(&req_body).send().await {
             Ok(mut res) => {
+                if !res.status().is_success() {
+                    let status = res.status();
+                    let body = res.text().await.unwrap_or_default();
+                    let _ = window.emit("ai-stream-error", serde_json::json!({
+                        "request_id": &req_id_clone,
+                        "error": format!("Lỗi HTTP từ Ollama: {} — {}", status, body)
+                    }));
+                } else {
                 loop {
                     match res.chunk().await {
                         Ok(Some(chunk)) => {
@@ -349,14 +404,17 @@ pub async fn ai_stream(
                                 
                                 match serde_json::from_slice::<serde_json::Value>(&line) {
                                     Ok(json) => {
-                                        if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
-                                            let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                                "request_id": &req_id_clone,
-                                                "text": resp_text,
-                                                "done": is_done
-                                            }));
-                                        }
+                                        let content = json
+                                            .get("message")
+                                            .and_then(|m| m.get("content"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                            "request_id": &req_id_clone,
+                                            "text": content,
+                                            "done": is_done
+                                        }));
                                     }
                                     Err(e) => {
                                         let _ = window.emit("ai-stream-error", serde_json::json!({
@@ -368,15 +426,26 @@ pub async fn ai_stream(
                             }
                         }
                         Ok(None) => {
-                            // End of stream
+                            // End of stream — parse any remaining buffer
                             if !buffer.trim_ascii().is_empty() {
-                                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&buffer) {
-                                    if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
+                                match serde_json::from_slice::<serde_json::Value>(&buffer) {
+                                    Ok(json) => {
+                                        let content = json
+                                            .get("message")
+                                            .and_then(|m| m.get("content"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
                                         let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
                                         let _ = window.emit("ai-stream-chunk", serde_json::json!({
                                             "request_id": &req_id_clone,
-                                            "text": resp_text,
+                                            "text": content,
                                             "done": is_done
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        let _ = window.emit("ai-stream-error", serde_json::json!({
+                                            "request_id": &req_id_clone,
+                                            "error": format!("Lỗi parse JSON buffer dư: {}", e)
                                         }));
                                     }
                                 }
@@ -392,6 +461,7 @@ pub async fn ai_stream(
                         }
                     }
                 }
+                } // end else (status ok)
             }
             Err(e) => {
                 let _ = window.emit("ai-stream-error", serde_json::json!({

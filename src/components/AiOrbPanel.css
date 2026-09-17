@@ -102,3 +102,23 @@
   white-space: pre-wrap;
   word-wrap: break-word;
 }
+
+.orb-ripple {
+  fill: transparent;
+  stroke: rgba(255, 255, 255, 0.8);
+  stroke-width: 2px;
+  animation: orb-ripple-anim 400ms ease-out forwards;
+}
+
+@keyframes orb-ripple-anim {
+  0% {
+    r: 4px;
+    opacity: 0.6;
+    stroke-width: 3px;
+  }
+  100% {
+    r: 40px;
+    opacity: 0;
+    stroke-width: 1px;
+  }
+}
