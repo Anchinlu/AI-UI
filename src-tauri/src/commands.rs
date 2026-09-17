@@ -171,7 +171,7 @@ pub struct AiServerStatus {
     pub backend: String, // "llama.cpp" or "ollama"
     pub model: String,
     pub is_ready: bool,
-    pub ram_usage: u32,
+    pub ram_usage: Option<u32>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -182,50 +182,140 @@ pub struct AiGenerateParams {
     pub stream: Option<bool>,
 }
 
+const OLLAMA_URL: &str = "http://127.0.0.1:11435";
+const MODEL_NAME: &str = "qwen2.5:1.5b";
+
+#[derive(serde::Deserialize)]
+struct OllamaTagResponse {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(serde::Deserialize)]
+struct OllamaModel {
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+struct OllamaGenerateRequest {
+    model: String,
+    prompt: String,
+    stream: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+}
+
 /// Checks the status of the local AI server
 #[command]
 pub async fn ai_get_status() -> Result<AiServerStatus, String> {
-    // TODO: Implement actual health check against 127.0.0.1:8080 (llama.cpp) or 11435 (Ollama)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
+
+    let res = client.get(format!("{}/api/tags", OLLAMA_URL))
+        .send()
+        .await
+        .map_err(|e| format!("Server chưa chạy hoặc lỗi kết nối: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Lỗi HTTP từ Ollama: {}", res.status()));
+    }
+
+    let tags: OllamaTagResponse = res.json()
+        .await
+        .map_err(|e| format!("Không thể parse response: {}", e))?;
+
+    let is_ready = tags.models.iter().any(|m| m.name == MODEL_NAME);
+
+    if !is_ready {
+        return Err(format!("Model '{}' chưa được tải.", MODEL_NAME));
+    }
+
     Ok(AiServerStatus {
-        backend: "llama.cpp".into(),
-        model: "qwen2.5:1.5b".into(),
+        backend: "ollama".into(),
+        model: MODEL_NAME.into(),
         is_ready: true,
-        ram_usage: 1056,
+        ram_usage: None,
     })
 }
 
 /// Generates a complete text response (blocking until done)
 #[command]
-pub async fn ai_generate(prompt: String, params: AiGenerateParams) -> Result<String, String> {
-    // TODO: Implement HTTP POST to backend
-    println!("Mocking ai_generate for request_id: {}", params.request_id);
-    Ok(format!("Mock response to: {}", prompt))
+pub async fn ai_generate(prompt: String, _params: AiGenerateParams) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
+
+    let req_body = OllamaGenerateRequest {
+        model: MODEL_NAME.to_string(),
+        prompt,
+        stream: false,
+    };
+
+    let res = client.post(format!("{}/api/generate", OLLAMA_URL))
+        .json(&req_body)
+        .send()
+        .await
+        .map_err(|e| format!("Lỗi gọi Ollama API (timeout hoặc server down): {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Lỗi HTTP từ Ollama: {}", res.status()));
+    }
+
+    let gen_res: OllamaGenerateResponse = res.json()
+        .await
+        .map_err(|e| format!("Lỗi parse kết quả JSON: {}", e))?;
+
+    Ok(gen_res.response)
 }
 
-/// Starts streaming a text response via Tauri events
 #[command]
-pub async fn ai_stream(window: tauri::Window, _prompt: String, params: AiGenerateParams) -> Result<(), String> {
-    // TODO: Implement HTTP streaming to backend
-    // Will emit events like `ai-stream-chunk` using window.emit()
-    println!("Mocking ai_stream for request_id: {}", params.request_id);
-    
+pub async fn ai_stream(window: tauri::Window, prompt: String, params: AiGenerateParams) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
+
+    let req_body = OllamaGenerateRequest {
+        model: MODEL_NAME.to_string(),
+        prompt,
+        stream: true,
+    };
+
     let req_id = params.request_id.clone();
     
-    // Spawn a standard thread for mocking sleep without tokio dependency
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = window.emit("ai-stream-chunk", serde_json::json!({
-            "request_id": req_id,
-            "text": "Xin chào, ",
-            "done": false
-        }));
-        
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = window.emit("ai-stream-chunk", serde_json::json!({
-            "request_id": req_id,
-            "text": "đây là phản hồi thử nghiệm.",
-            "done": true
-        }));
+    tauri::async_runtime::spawn(async move {
+        match client.post(format!("{}/api/generate", OLLAMA_URL)).json(&req_body).send().await {
+            Ok(mut res) => {
+                while let Ok(Some(chunk)) = res.chunk().await {
+                    if let Ok(text) = String::from_utf8(chunk.to_vec()) {
+                        for line in text.lines() {
+                            if line.trim().is_empty() { continue; }
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                                if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
+                                    let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                        "request_id": &req_id,
+                                        "text": resp_text,
+                                        "done": is_done
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = window.emit("ai-stream-error", serde_json::json!({
+                    "request_id": &req_id,
+                    "error": format!("Lỗi stream: {}", e)
+                }));
+            }
+        }
     });
     
     Ok(())

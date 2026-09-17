@@ -28,12 +28,18 @@ for (let i = 0; i < VERTICES.length; i++) {
 
 export type AiState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
-export function AiOrbPanel({ isRadialOpen }: { isRadialOpen?: boolean }) {
+export function AiOrbPanel({ 
+  isRadialOpen,
+  setIsInputOpen,
+  aiState
+}: { 
+  isRadialOpen?: boolean;
+  setIsInputOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  aiState: AiState;
+}) {
   const svgRef = useRef<SVGSVGElement>(null);
   const linesRef = useRef<(SVGLineElement | null)[]>([]);
   const coreRef = useRef<SVGCircleElement>(null);
-  
-  const [aiState, setAiState] = useState<AiState>('idle');
   
   // Mutable animation state to bypass React re-renders for max FPS
   const anim = useRef({
@@ -43,6 +49,15 @@ export function AiOrbPanel({ isRadialOpen }: { isRadialOpen?: boolean }) {
   });
 
   const [isVisible, setIsVisible] = useState(true);
+
+  const handleOrbClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRadialOpen) return;
+
+    if (setIsInputOpen) {
+      setIsInputOpen(prev => !prev);
+    }
+  };
 
   useEffect(() => {
     const handleVis = (e: Event) => {
@@ -99,69 +114,39 @@ export function AiOrbPanel({ isRadialOpen }: { isRadialOpen?: boolean }) {
       const sy = Math.sin(anim.current.ry), cy = Math.cos(anim.current.ry);
       const sz = Math.sin(anim.current.rz), cz = Math.cos(anim.current.rz);
 
-      // Project vertices
-      const projected = VERTICES.map(v => {
-        let x = v[0], y = v[1], z = v[2];
-        
-        // Rot X
-        let ty = y * cx - z * sx;
-        let tz = y * sx + z * cx;
-        y = ty; z = tz;
-        
-        // Rot Y
-        let tx = x * cy + z * sy;
-        tz = -x * sy + z * cy;
-        x = tx; z = tz;
-        
-        // Rot Z
-        tx = x * cz - y * sz;
-        ty = x * sz + y * cz;
-        x = tx; y = ty;
+      for (let i = 0; i < EDGES.length; i++) {
+        const [v1, v2] = EDGES[i];
+        const p1 = VERTICES[v1], p2 = VERTICES[v2];
 
-        // Apply scale and projection
-        const scale = anim.current.scale;
-        const perspective = 100 / (100 - z * scale);
-        
-        return {
-          x: 40 + x * scale * perspective,
-          y: 40 + y * scale * perspective,
-          z: z // keep original z for depth sorting/fading
+        const transform = (p: number[]) => {
+          const x1 = p[0]*cy*cz - p[0]*sz*sx*sy - p[1]*sz*cx + p[2]*sy*cz + p[2]*sz*sx*cy;
+          const y1 = p[0]*cy*sz + p[0]*cz*sx*sy + p[1]*cx*cz + p[2]*sy*sz - p[2]*cz*sx*cy;
+          return { x: x1, y: y1 };
         };
-      });
 
-      // Update SVG lines directly via DOM
-      EDGES.forEach((edge, i) => {
+        const t1 = transform(p1);
+        const t2 = transform(p2);
+
+        const s = anim.current.scale;
         const line = linesRef.current[i];
         if (line) {
-          const p1 = projected[edge[0]];
-          const p2 = projected[edge[1]];
-          
-          line.setAttribute('x1', p1.x.toFixed(2));
-          line.setAttribute('y1', p1.y.toFixed(2));
-          line.setAttribute('x2', p2.x.toFixed(2));
-          line.setAttribute('y2', p2.y.toFixed(2));
-          
-          // Z-depth fading (faces further away are darker)
-          const avgZ = (p1.z + p2.z) / 2;
-          const op = Math.max(0.1, Math.min(1.0, (avgZ + 1.5) / 3));
-          line.setAttribute('stroke', `rgba(255, 255, 255, ${op})`);
+          line.setAttribute('x1', (40 + t1.x * s).toString());
+          line.setAttribute('y1', (40 + t1.y * s).toString());
+          line.setAttribute('x2', (40 + t2.x * s).toString());
+          line.setAttribute('y2', (40 + t2.y * s).toString());
+
+          const opacity = Math.max(0.1, 1 - (aiState === 'thinking' ? 0.8 : 0));
+          const strokeColor = `rgba(255, 255, 255, ${opacity * 0.6})`;
+          line.setAttribute('stroke', strokeColor);
         }
-      });
-      
-      // Update Core Glow effect
+      }
+
       if (coreRef.current) {
-        if (aiState === 'listening') {
-          anim.current.glowOpacity = 0.5 + Math.sin(time * 0.02) * 0.4; // Fast pulse
-        } else if (aiState === 'thinking') {
-          anim.current.glowOpacity = 0.4 + Math.sin(time * 0.005) * 0.2; // Slow breathe
-        } else if (aiState === 'speaking') {
-          anim.current.glowOpacity = 0.6 + Math.sin(time * 0.03) * 0.4; // Rapid flicker
-        } else if (aiState === 'error') {
-          anim.current.glowOpacity = 0.2 + Math.random() * 0.8; // Erratic flash
-        } else {
-          anim.current.glowOpacity = 0.5; // Steady
-        }
-        coreRef.current.setAttribute('opacity', anim.current.glowOpacity.toFixed(2));
+        let baseR = 2.5;
+        if (aiState === 'speaking') baseR = 3.5 + Math.sin(time * 0.05) * 1.5;
+        if (aiState === 'listening') baseR = 4.0;
+        coreRef.current.setAttribute('r', baseR.toString());
+        coreRef.current.setAttribute('fill', '#ffffff');
       }
 
       reqId = requestAnimationFrame(loop);
@@ -188,13 +173,8 @@ export function AiOrbPanel({ isRadialOpen }: { isRadialOpen?: boolean }) {
   return (
     <div 
       className={`ai-orb-panel ${isRadialOpen ? 'radial-open' : ''}`}
-      onClick={() => {
-        // Toggle states for QA testing purposes
-        const states: AiState[] = ['idle', 'listening', 'thinking', 'speaking', 'error'];
-        const nextIndex = (states.indexOf(aiState) + 1) % states.length;
-        setAiState(states[nextIndex]);
-      }}
-      title={`Current State: ${aiState}. Click to toggle.`}
+      onClick={handleOrbClick}
+      title={`Current State: ${aiState}. Click to toggle input.`}
     >
       <svg ref={svgRef} width="80" height="80" viewBox="0 0 80 80" className="ai-orb-svg">
         <defs>

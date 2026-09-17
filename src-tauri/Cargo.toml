@@ -23,6 +23,7 @@ tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 chrono = "0.4"
 wmi = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Win32 API for global mouse tracking + audio control
 [target.'cfg(windows)'.dependencies]
