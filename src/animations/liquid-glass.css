@@ -1,0 +1,457 @@
+/* liquid-glass.css — Premium glass styling for the taskbar.
+ *
+ * Animation is now handled entirely by JS spring physics (useSpringAnimation).
+ * This CSS only defines the visual appearance — glass effect, highlights, layout.
+ *
+ * Spec constraints:
+ * - blur() radius <= 20px for Iris Xe performance
+ * - No heavy box-shadow stacking
+ */
+
+/* === Taskbar Shell Container === */
+.taskbar-shell {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* === The floating bar itself === */
+.taskbar-bar {
+  position: relative;
+  width: 440px;
+  height: 80px;
+  margin-top: 0;
+  
+  /* Solid black like a screen notch */
+  background: #000000;
+  
+  /* Removed top border to attach seamlessly to screen */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: none;
+  border-radius: 0 0 28px 28px;
+  
+  /* Clean depth shadow */
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  
+  /* Compositor hints */
+  will-change: transform, opacity;
+  transform-origin: top center;
+  
+  /* Start hidden (JS will control via spring physics) */
+  opacity: 0;
+  pointer-events: none;
+  
+  /* Smooth sub-pixel rendering */
+  -webkit-font-smoothing: antialiased;
+}
+
+.taskbar-bar.radial-open-bg {
+  /* No background, let the 3D orbit and AI Orb float */
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* === Outward curves (Fillets) === */
+.taskbar-curve-left,
+.taskbar-curve-right {
+  position: absolute;
+  top: 0;
+  width: 32px;
+  height: 32px;
+  background: #000000;
+  pointer-events: none;
+}
+
+.taskbar-curve-left {
+  left: -32px;
+  /* Mask out the bottom-left to leave a top-right inward curve */
+  mask-image: radial-gradient(circle at 0% 100%, transparent 32px, black 32.5px);
+  -webkit-mask-image: radial-gradient(circle at 0% 100%, transparent 32px, black 32.5px);
+}
+
+.taskbar-curve-right {
+  right: -32px;
+  /* Mask out the bottom-right to leave a top-left inward curve */
+  mask-image: radial-gradient(circle at 100% 100%, transparent 32px, black 32.5px);
+  -webkit-mask-image: radial-gradient(circle at 100% 100%, transparent 32px, black 32.5px);
+}
+
+/* === Inner highlight layer (subtle edge lighting) === */
+.taskbar-glass-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* === Content layout === */
+.taskbar-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0 24px;
+  gap: 12px;
+  position: relative;
+  z-index: 10;
+  
+  /* 3D context for depth sorting between AI Orb and Orbital Nodes */
+  perspective: 1200px;
+  transform-style: preserve-3d;
+}
+
+.taskbar-content.has-selected-node .ai-orb-panel {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* === Laser Sweep Effect (Border Glow) === */
+.taskbar-laser-container {
+  position: absolute;
+  inset: -1px; 
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0; 
+  overflow: hidden;
+}
+
+.taskbar-laser {
+  position: absolute;
+  left: -50%;
+  top: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(
+    from 90deg, 
+    transparent 70%, 
+    rgba(255, 255, 255, 1) 95%, 
+    rgba(255, 255, 255, 0.8) 100%
+  );
+  animation: laser-spin 2s linear infinite;
+}
+
+.taskbar-laser-cover {
+  position: absolute;
+  inset: 1.5px;
+  border-radius: inherit;
+  background: #000000;
+  z-index: 1;
+}
+
+@keyframes laser-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.phase-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+/* === Radial Menu Orbitals (3D Ring) === */
+.radial-orbitals-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d; /* Share 3D space with taskbar-content */
+}
+
+.radial-orbitals {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-style: preserve-3d;
+  /* Rotate X to lay the ring down like a halo */
+  transform: rotateX(70deg);
+  /* Animation now handled by React rAF */
+}
+
+.radial-orbitals.paused,
+.radial-orbitals.paused .orbital-node {
+  /* Pause logic now handled in React state */
+}
+
+/* Connection Ray */
+.connection-ray {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 2px;
+  height: 130px; /* Matches the orbital radius */
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.8) 50%, transparent 50%);
+  background-size: 100% 12px;
+  mask-image: linear-gradient(to top, transparent 10%, black 50%);
+  -webkit-mask-image: linear-gradient(to top, transparent 10%, black 50%);
+  transform: translateX(-50%);
+  transform-origin: bottom center;
+  pointer-events: none;
+  animation: ray-pulse 1.5s infinite alternate ease-in-out, ray-flow 0.4s linear infinite;
+}
+
+@keyframes ray-pulse {
+  0% { opacity: 0.5; box-shadow: 0 0 4px rgba(255, 255, 255, 0.5); }
+  100% { opacity: 1; box-shadow: 0 0 10px rgba(255, 255, 255, 1); }
+}
+
+@keyframes ray-flow {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 -12px; }
+}
+
+.orbital-node-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+}
+
+.orbital-node {
+  position: absolute;
+  top: -24px;
+  left: -24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  
+  background: #000000;
+  border: 1.5px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  
+  transition: border-color 0.2s, box-shadow 0.2s, filter 0.2s, opacity 0.2s, background 0.2s;
+  cursor: pointer;
+  pointer-events: none; /* Default to unclickable (in-back) */
+  opacity: 0.4;
+  filter: blur(1px);
+}
+
+.orbital-node.in-front {
+  pointer-events: auto;
+  opacity: 1;
+  filter: blur(0);
+  /* Google Colors Gradient Border */
+  border: 2px solid transparent;
+  background: linear-gradient(#000, #000) padding-box, 
+              conic-gradient(#4285F4, #EA4335, #FBBC05, #34A853, #4285F4) border-box;
+  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.2);
+}
+
+.orbital-node.in-front:hover {
+  box-shadow: 0 0 20px rgba(66, 133, 244, 0.8), inset 0 0 10px rgba(255, 255, 255, 0.2);
+}
+
+/* Removed CSS keyframes (orbit-spin, orbit-anti-spin) as it's now React-driven */
+
+/* === Orbital Nodes States === */
+.orbital-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orbital-node.dimmed {
+  opacity: 0.3;
+  transform: scale(0.9);
+}
+
+.orbital-node.selected {
+  transform: scale(1.1);
+  box-shadow: 0 0 20px currentcolor;
+  background: rgba(0, 0, 0, 0.8);
+}
+
+/* === Orbital Label === */
+.orbital-label {
+  position: absolute;
+  top: 56px;
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+  white-space: nowrap;
+  animation: fade-in 0.2s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* === Placeholder Panel === */
+.placeholder-panel {
+  position: absolute;
+  top: calc(100% + 90px); /* Move further below the radial menu */
+  left: 50%;
+  transform: translate(-50%, 0);
+  width: 280px;
+  background: rgba(15, 15, 15, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 16px;
+  color: white;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  z-index: 20;
+  animation: panel-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+@keyframes panel-pop {
+  from { opacity: 0; transform: translate(-50%, -20px) scale(0.9); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+.placeholder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.placeholder-body {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.orbit-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.back-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.panel-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.control-row label {
+  flex: 1;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.control-row input[type="range"] {
+  flex: 1;
+  accent-color: #3b82f6;
+}
+
+.control-row select {
+  background: rgba(0, 0, 0, 0.3);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.btn-toggle {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-toggle.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.grid-item {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px 8px;
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.grid-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.btn-full {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.btn-full:hover {
+  background: rgba(255, 255, 255, 0.2);
+}

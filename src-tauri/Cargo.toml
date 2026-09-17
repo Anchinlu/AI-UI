@@ -1,0 +1,45 @@
+[package]
+name = "ai-taskbar"
+version = "0.1.0"
+description = "AI Floating Taskbar - Desktop overlay"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+chrono = "0.4"
+wmi = "0.14"
+
+# Win32 API for global mouse tracking + audio control
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Power",
+  "Win32_System_Com",
+  "Win32_System_Variant",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Graphics_Gdi",
+  "Win32_Devices_Display",
+  "Devices_Radios",
+  "Devices_Bluetooth",
+  "Devices_Enumeration",
+  "Networking_Connectivity",
+] }

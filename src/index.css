@@ -1,0 +1,18 @@
+/* index.css — Global reset + transparent background for Tauri overlay */
+
+/* CRITICAL: WebView2 requires CSS transparent to actually show through */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+
+/* Disable text selection and default cursor across entire overlay */
+* {
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
