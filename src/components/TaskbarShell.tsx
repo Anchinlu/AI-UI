@@ -26,26 +26,66 @@ const SATELLITES = [
 
 export function TaskbarShell() {
   const barRef = useRef<HTMLDivElement>(null);
-  const { setIsLocked } = useAutoHide(barRef);
+  const { setIsLocked, stopAnimation } = useAutoHide(barRef);
 
   const [dragY, setDragY] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const startYRef = useRef(0);
   const pointerActiveRef = useRef(false);
   const pointerIdRef = useRef<number | null>(null);
-
-  const [isRadialOpen, setIsRadialOpen] = useState(false);
-  const [isInputOpen, setIsInputOpen] = useState(false);
+  type WindowMode = 'hidden' | 'bar' | 'ai-input' | 'radial' | 'dragging';
+  const [currentMode, setCurrentMode] = useState<WindowMode>('bar');
+  
+  const isRadialOpen = currentMode === 'radial';
+  const isInputOpen = currentMode === 'ai-input';
   
   // === AI Prompt State ===
   const [aiState, setAiState] = useState<AiState>('idle');
   const [prompt, setPrompt] = useState('');
   const [resultText, setResultText] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const activeRequestId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (currentMode !== 'ai-input' && activeRequestId.current) {
+      invoke('ai_stop', { requestId: activeRequestId.current }).catch(console.error);
+      activeRequestId.current = null;
+      setAiState('idle');
+    }
+  }, [currentMode]);
+
+  const handleOrbClick = async () => {
+    if (currentMode === 'radial' || currentMode === 'dragging') return;
+
+    if (currentMode !== 'ai-input') {
+      stopAnimation(); // Dừng spring physics
+      setIsLocked(true); // Khóa auto-hide
+      
+      // Mở rộng cửa sổ TRƯỚC
+      await invoke('expand_window', { height: 400 }).catch(console.error);
+      invoke('set_interaction_mode', { mode: 'radial' }).catch(console.error);
+      
+      // Hiện prompt SAU KHI cửa sổ đã to
+      setCurrentMode('ai-input');
+    } else {
+      // Đóng AI Prompt
+      setCurrentMode('bar');
+      await invoke('shrink_window').catch(console.error);
+      invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
+      setIsLocked(false);
+    }
+  };
 
   const handleAiKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && prompt.trim() !== '') {
       e.preventDefault();
+      
+      if (activeRequestId.current) {
+        invoke('ai_stop', { requestId: activeRequestId.current }).catch(console.error);
+      }
+
+      const reqId = crypto.randomUUID();
+      activeRequestId.current = reqId;
+
       setAiState('thinking');
       setErrorMsg(null);
       setResultText(''); // Initialize empty for stream
@@ -53,30 +93,39 @@ export function TaskbarShell() {
       try {
         await invoke('ai_stream', { 
           prompt, 
-          params: { request_id: Date.now().toString(), stream: true } 
+          params: { request_id: reqId, stream: true } 
         });
         setPrompt('');
       } catch (err) {
-        setErrorMsg(String(err));
-        setAiState('error');
+        if (activeRequestId.current === reqId) {
+          setErrorMsg(String(err));
+          setAiState('error');
+        }
       }
     }
   };
 
   useEffect(() => {
     const unlistenChunkPromise = listen('ai-stream-chunk', (event: any) => {
-      const { text, done } = event.payload;
+      const { text, done, request_id } = event.payload;
+      if (request_id !== activeRequestId.current) return;
+
       setAiState('speaking');
       setResultText(prev => (prev || '') + text);
       
       if (done) {
+        activeRequestId.current = null;
         setTimeout(() => setAiState('idle'), 5000);
       }
     });
 
     const unlistenErrorPromise = listen('ai-stream-error', (event: any) => {
-      setErrorMsg(event.payload.error);
+      const { error, request_id } = event.payload;
+      if (request_id !== activeRequestId.current) return;
+
+      setErrorMsg(error);
       setAiState('error');
+      activeRequestId.current = null;
     });
 
     return () => {
@@ -335,60 +384,50 @@ export function TaskbarShell() {
 
   // === Phase 6.1: Escape key to close Radial ===
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isRadialOpen) {
-        setIsLocked(false);
-        setIsRadialOpen(false);
-        setSelectedNode(null);
-        if (barRef.current) {
-          barRef.current.style.transition = 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)';
-          barRef.current.style.transform = `translateY(0px)`;
-          barRef.current.style.width = `440px`;
-          barRef.current.style.height = `80px`;
-          barRef.current.style.borderRadius = `0 0 28px 28px`;
-          barRef.current.style.background = '#000000';
-          barRef.current.style.border = '1px solid rgba(255, 255, 255, 0.08)';
-          barRef.current.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)';
-          
-          const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
-          if (content) {
-            const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
-            if (orb) orb.style.left = `24px`;
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (currentMode === 'radial') {
+          setCurrentMode('bar');
+          setIsLocked(false);
+          setSelectedNode(null);
+          if (barRef.current) {
+            barRef.current.style.transform = `translateY(0px)`;
+            barRef.current.style.width = `440px`;
+            barRef.current.style.height = `80px`;
+            barRef.current.style.borderRadius = `0 0 28px 28px`;
+            barRef.current.style.background = '#000000';
+            barRef.current.style.border = '1px solid rgba(255, 255, 255, 0.08)';
+            barRef.current.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)';
             
-            const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
-            if (dateTime) {
-              dateTime.style.opacity = `1`;
-              dateTime.style.transform = `scale(1)`;
-              dateTime.style.pointerEvents = 'auto';
+            const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
+            if (content) {
+              const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
+              if (orb) orb.style.left = `24px`;
+              
+              const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
+              if (dateTime) {
+                dateTime.style.opacity = `1`;
+                dateTime.style.transform = `scale(1)`;
+                dateTime.style.pointerEvents = 'auto';
+              }
             }
           }
-          
-          setTimeout(() => {
-            if (barRef.current) barRef.current.style.transition = 'none';
-          }, 500);
+          await invoke('shrink_window').catch(console.error);
+          invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
+        } else if (currentMode === 'ai-input') {
+          setCurrentMode('bar');
+          await invoke('shrink_window').catch(console.error);
+          invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
+          setIsLocked(false);
         }
-        invoke('shrink_window').catch(console.error);
-        invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
-      } else if (e.key === 'Escape' && isInputOpen) {
-        setIsInputOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isRadialOpen, isInputOpen]);
+  }, [currentMode, setIsLocked]);
 
-  // === Phase 7: Handle window expansion for Chat Bubble ===
-  useEffect(() => {
-    if (isRadialOpen) return; // Radial handles its own sizes
-
-    if (isInputOpen) {
-      invoke('expand_window', { height: 400 }).catch(console.error);
-      invoke('set_interaction_mode', { mode: 'radial' }).catch(console.error); // We use radial mode for partial hit-testing
-    } else {
-      invoke('shrink_window').catch(console.error);
-      invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
-    }
-  }, [isInputOpen, isRadialOpen]);
+  // === Phase 7: Remove auto-resize based on dependencies ===
+  // Window resizing is now handled sequentially during explicit actions like handleOrbClick or drag release.
 
   useEffect(() => {
     if (!isRadialOpen && !isInputOpen) {
@@ -461,17 +500,12 @@ export function TaskbarShell() {
     Boolean(target.closest('.ai-orb-panel'));
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Ignore interactive elements (buttons, panels). 
-    // The Orb is handled separately because it can be dragged.
     if (isInteractiveTarget(e.target)) return;
-
-    // If Radial is open, ONLY the AI Orb can initiate a drag (to close).
-    if (isRadialOpen && !isOrbTarget(e.target)) return;
+    if (currentMode === 'radial' && !isOrbTarget(e.target)) return;
 
     pointerActiveRef.current = true;
     pointerIdRef.current = e.pointerId;
-    // When Radial is closed, dragY is positive. When open, dragY is negative (dragging up).
-    startYRef.current = e.clientY - (isRadialOpen ? 0 : dragY);
+    startYRef.current = e.clientY - (currentMode === 'radial' ? 0 : dragY);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -479,23 +513,20 @@ export function TaskbarShell() {
     
     const dyRaw = e.clientY - startYRef.current;
     
-    // 5px threshold to differentiate between a click and a drag
-    if (!isDragging) {
-      if (!isRadialOpen && dyRaw > 5) {
-        // Dragging DOWN to open Radial
-        setIsDragging(true);
-        setIsLocked(true); // Lock auto-hide
-        setIsInputOpen(false); // Close input when dragging starts
+    if (currentMode !== 'dragging') {
+      if (currentMode !== 'radial' && dyRaw > 5) {
+        stopAnimation();
+        setCurrentMode('dragging');
+        setIsLocked(true);
         invoke('set_interaction_mode', { mode: 'dragging' }).catch(console.error);
         
         if (pointerIdRef.current !== null) {
           e.currentTarget.setPointerCapture(pointerIdRef.current);
         }
-        
         invoke('expand_window', { height: 600 }).catch(console.error);
-      } else if (isRadialOpen && dyRaw < -5) {
-        // Dragging UP on AI Orb to close Radial
-        setIsDragging(true);
+      } else if (currentMode === 'radial' && dyRaw < -5) {
+        stopAnimation();
+        setCurrentMode('dragging');
         setIsLocked(true);
         invoke('set_interaction_mode', { mode: 'dragging' }).catch(console.error);
         
@@ -505,15 +536,14 @@ export function TaskbarShell() {
       }
     }
     
-    if (!isDragging) return;
+    if (currentMode !== 'dragging') return;
     
-    if (!isRadialOpen) {
-      // Dragging down morph logic
+    if (dragY >= 0 && dyRaw >= 0) { // dragging down
       const dy = Math.max(0, dyRaw);
       setDragY(dy);
       
-      // Direct DOM manipulation for Droplet Morphing
       if (barRef.current) {
+        barRef.current.style.transition = 'none';
         const squashW = Math.max(160, 440 - dy * 0.8);
         const stretchH = 80 + dy;
         const radius = 28 + dy * 1.5;
@@ -527,7 +557,6 @@ export function TaskbarShell() {
         if (content) {
           const progress = Math.min(1, dy / 80);
           
-          // Center the absolutely positioned AI Orb
           const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
           if (orb) {
             const targetLeft = (squashW - 80) / 2;
@@ -535,7 +564,6 @@ export function TaskbarShell() {
             orb.style.left = `${currentLeft}px`;
           }
           
-          // Fade out and shrink Date/Time
           const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
           if (dateTime) {
             dateTime.style.opacity = `${1 - progress * 1.5}`;
@@ -544,20 +572,19 @@ export function TaskbarShell() {
           }
         }
       }
-    } else {
-      // Dragging up to close logic
+    } else { // dragging up
       const dy = Math.min(0, dyRaw);
       setDragY(dy);
       
-      // Visually move the Radial container up
       if (barRef.current) {
+        barRef.current.style.transition = 'none';
         barRef.current.style.transform = `translateY(${dy}px)`;
       }
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isDragging && pointerIdRef.current !== null) {
+  const handlePointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
+    if (currentMode === 'dragging' && pointerIdRef.current !== null) {
       try {
         e.currentTarget.releasePointerCapture(pointerIdRef.current);
       } catch (err) {
@@ -566,39 +593,31 @@ export function TaskbarShell() {
     }
     
     const wasTracking = pointerActiveRef.current;
-    const wasDragging = isDragging;
+    const wasDragging = currentMode === 'dragging';
     
     pointerActiveRef.current = false;
     pointerIdRef.current = null;
-    setIsDragging(false);
     
-    if (!wasTracking) {
-      return; // Handled by interactive target's onClick
-    }
+    if (!wasTracking) return;
     
     if (barRef.current) {
-      barRef.current.style.transition = 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)'; 
+      barRef.current.style.transition = 'transform 0.35s ease, opacity 0.25s ease, width 0.35s ease, height 0.35s ease, border-radius 0.35s ease';
     }
     
-    // If Radial was CLOSED: dragging down (dragY > 80) opens it.
-    // If Radial was OPEN: dragging up (dragY < -50) closes it.
     let shouldOpen = false;
     let shouldClose = false;
 
-    if (!isRadialOpen) {
-      shouldClose = !wasDragging; // Normal click to shrink if not dragging
+    if (dragY >= 0) { // was dragged down
+      shouldClose = !wasDragging;
       shouldOpen = wasDragging && dragY >= 80;
-    } else {
+    } else { // was dragged up
       shouldClose = wasDragging && dragY <= -50;
-      shouldOpen = wasDragging && dragY > -50; // Cancel drag up, snap back open
+      shouldOpen = wasDragging && dragY > -50; 
     }
 
-    if (shouldClose || (!isRadialOpen && !shouldOpen && wasDragging)) {
-      // Snap back to closed state
+    if (shouldClose || (dragY >= 0 && !shouldOpen && wasDragging)) {
       setDragY(0);
-      setIsLocked(false);
-      setIsRadialOpen(false);
-      setIsInputOpen(false);
+      setCurrentMode('bar');
       setSelectedNode(null);
       
       if (barRef.current) {
@@ -613,7 +632,7 @@ export function TaskbarShell() {
         const content = barRef.current.querySelector('.taskbar-content') as HTMLElement;
         if (content) {
           const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
-          if (orb) orb.style.left = `24px`; // Back to normal
+          if (orb) orb.style.left = `24px`;
           
           const dateTime = content.querySelector('.datetime-widget-container') as HTMLElement;
           if (dateTime) {
@@ -627,16 +646,16 @@ export function TaskbarShell() {
           if (barRef.current) barRef.current.style.transition = 'none';
         }, 500);
       }
-      invoke('shrink_window').catch(console.error);
+      await invoke('shrink_window').catch(console.error);
       invoke('set_interaction_mode', { mode: 'bar' }).catch(console.error);
+      setIsLocked(false);
     } else if (shouldOpen) {
-      // Detach and form Radial Menu (or snap back open)
       setDragY(120);
-      setIsRadialOpen(true);
+      setCurrentMode('radial');
       
       if (barRef.current) {
-        barRef.current.style.transform = `translateY(0px)`; // Snaps exactly to top edge
-        barRef.current.style.width = `340px`; // Slightly larger for better spacing
+        barRef.current.style.transform = `translateY(0px)`;
+        barRef.current.style.width = `340px`;
         barRef.current.style.height = `340px`;
         barRef.current.style.background = 'transparent';
         barRef.current.style.border = 'none';
@@ -647,7 +666,6 @@ export function TaskbarShell() {
         if (content) {
           const orb = content.querySelector('.ai-orb-panel') as HTMLElement;
           if (orb) {
-            // Keep orb centered inside the 340x340 area -> (340 - 80) / 2 = 130
             orb.style.left = `130px`;
           }
         }
@@ -656,7 +674,6 @@ export function TaskbarShell() {
           if (barRef.current) barRef.current.style.transition = 'none';
         }, 500);
       }
-      // Tell Rust: Radial is now open → hit-test mode
       invoke('set_interaction_mode', { mode: 'radial' }).catch(console.error);
     }
   };
@@ -856,7 +873,7 @@ export function TaskbarShell() {
         <div className={`taskbar-content ${selectedNode !== null ? 'has-selected-node' : ''}`} style={{ perspective: '1200px', transformStyle: 'preserve-3d' }}>
           <AiOrbPanel 
             isRadialOpen={isRadialOpen} 
-            setIsInputOpen={setIsInputOpen} 
+            onOrbClick={handleOrbClick}
             aiState={aiState}
           />
 
@@ -874,7 +891,7 @@ export function TaskbarShell() {
                     style={{ flex: 1 }}
                   />
                   <button 
-                    onClick={() => setIsInputOpen(false)}
+                    onClick={handleOrbClick}
                     style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 8px', fontSize: '14px', marginLeft: '4px' }}
                   >
                     ✕
@@ -888,7 +905,7 @@ export function TaskbarShell() {
                     {(aiState === 'speaking' || resultText) && <div className="ai-result-text">{resultText}</div>}
                   </div>
                   <button 
-                    onClick={() => setIsInputOpen(false)}
+                    onClick={handleOrbClick}
                     style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', padding: '0 8px', fontSize: '14px', marginLeft: '4px' }}
                   >
                     ✕

@@ -177,5 +177,5 @@ export function useAutoHide(barRef: React.RefObject<HTMLDivElement | null>) {
     };
   }, [showBar, hideBar]);
 
-  return { visibility: visibilityRef, setIsLocked };
+  return { visibility: visibilityRef, setIsLocked, stopAnimation: stop };
 }

@@ -133,33 +133,13 @@ pub fn update_interactive_zones(
 }
 
 #[command]
-pub fn expand_window(window: tauri::Window, height: f64) {
-    if let Ok(Some(monitor)) = window.primary_monitor() {
-        let max_height = monitor.size().height as f64;
-        let scale_factor = window.scale_factor().unwrap_or(1.0);
-        let max_logical = max_height / scale_factor;
-        
-        let target_h = height.min(max_logical);
-        let _ = window.set_size(tauri::LogicalSize::new(800.0, target_h));
-        
-        // Re-center horizontally
-        let monitor_pos = monitor.position();
-        let x = monitor_pos.x as f64 + (monitor.size().width as f64 - (800.0 * scale_factor)) / 2.0;
-        let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, monitor_pos.y));
-    }
+pub fn expand_window(_window: tauri::Window, _height: Option<f64>) {
+    // No-op in Full-Screen mode
 }
 
 #[command]
-pub fn shrink_window(window: tauri::Window) {
-    if let Ok(Some(monitor)) = window.primary_monitor() {
-        let scale_factor = window.scale_factor().unwrap_or(1.0);
-        let _ = window.set_size(tauri::LogicalSize::new(480.0, 96.0));
-        
-        // Re-center horizontally
-        let monitor_pos = monitor.position();
-        let x = monitor_pos.x as f64 + (monitor.size().width as f64 - (480.0 * scale_factor)) / 2.0;
-        let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, monitor_pos.y));
-    }
+pub fn shrink_window(_window: tauri::Window) {
+    // No-op in Full-Screen mode
 }
 
 // ==========================================
@@ -182,8 +162,42 @@ pub struct AiGenerateParams {
     pub stream: Option<bool>,
 }
 
-const OLLAMA_URL: &str = "http://127.0.0.1:11435";
-const MODEL_NAME: &str = "qwen2.5:1.5b";
+fn get_model_name() -> String {
+    std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".to_string())
+}
+
+async fn get_valid_ollama_url(state: &tauri::State<'_, crate::ai_task_manager::AiTaskManager>) -> Result<String, String> {
+    {
+        let cached = state.active_url.lock().await;
+        if let Some(url) = &*cached {
+            return Ok(url.clone());
+        }
+    }
+
+    let env_url = std::env::var("OLLAMA_URL").ok();
+    let ports = if let Some(url) = env_url {
+        vec![url]
+    } else {
+        vec!["http://127.0.0.1:11435".to_string(), "http://127.0.0.1:11434".to_string()]
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("Lỗi HTTP client: {}", e))?;
+
+    for url in ports {
+        if let Ok(res) = client.get(format!("{}/api/tags", url)).send().await {
+            if res.status().is_success() {
+                let mut cached = state.active_url.lock().await;
+                *cached = Some(url.clone());
+                return Ok(url);
+            }
+        }
+    }
+
+    Err("Không thể kết nối đến Ollama trên bất kỳ cổng nào (11435, 11434)".into())
+}
 
 #[derive(serde::Deserialize)]
 struct OllamaTagResponse {
@@ -209,13 +223,15 @@ struct OllamaGenerateResponse {
 
 /// Checks the status of the local AI server
 #[command]
-pub async fn ai_get_status() -> Result<AiServerStatus, String> {
+pub async fn ai_get_status(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>) -> Result<AiServerStatus, String> {
+    let ollama_url = get_valid_ollama_url(&state).await?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
 
-    let res = client.get(format!("{}/api/tags", OLLAMA_URL))
+    let res = client.get(format!("{}/api/tags", ollama_url))
         .send()
         .await
         .map_err(|e| format!("Server chưa chạy hoặc lỗi kết nối: {}", e))?;
@@ -228,15 +244,16 @@ pub async fn ai_get_status() -> Result<AiServerStatus, String> {
         .await
         .map_err(|e| format!("Không thể parse response: {}", e))?;
 
-    let is_ready = tags.models.iter().any(|m| m.name == MODEL_NAME);
+    let model_name = get_model_name();
+    let is_ready = tags.models.iter().any(|m| m.name == model_name);
 
     if !is_ready {
-        return Err(format!("Model '{}' chưa được tải.", MODEL_NAME));
+        return Err(format!("Model '{}' chưa được tải.", model_name));
     }
 
     Ok(AiServerStatus {
         backend: "ollama".into(),
-        model: MODEL_NAME.into(),
+        model: model_name,
         is_ready: true,
         ram_usage: None,
     })
@@ -244,19 +261,21 @@ pub async fn ai_get_status() -> Result<AiServerStatus, String> {
 
 /// Generates a complete text response (blocking until done)
 #[command]
-pub async fn ai_generate(prompt: String, _params: AiGenerateParams) -> Result<String, String> {
+pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, prompt: String, _params: AiGenerateParams) -> Result<String, String> {
+    let ollama_url = get_valid_ollama_url(&state).await?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
 
     let req_body = OllamaGenerateRequest {
-        model: MODEL_NAME.to_string(),
+        model: get_model_name(),
         prompt,
         stream: false,
     };
 
-    let res = client.post(format!("{}/api/generate", OLLAMA_URL))
+    let res = client.post(format!("{}/api/generate", ollama_url))
         .json(&req_body)
         .send()
         .await
@@ -274,48 +293,126 @@ pub async fn ai_generate(prompt: String, _params: AiGenerateParams) -> Result<St
 }
 
 #[command]
-pub async fn ai_stream(window: tauri::Window, prompt: String, params: AiGenerateParams) -> Result<(), String> {
+pub async fn ai_stream(
+    window: tauri::Window, 
+    state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, 
+    prompt: String, 
+    params: AiGenerateParams
+) -> Result<(), String> {
+    let ollama_url = get_valid_ollama_url(&state).await?;
+    let req_id = params.request_id.clone();
+
+    // Generate a new generation token for this request
+    let generation = {
+        let mut gen = state.next_generation.lock().await;
+        *gen += 1;
+        *gen
+    };
+
+    // Abort existing task with same ID if any
+    {
+        let mut tasks = state.tasks.lock().await;
+        if let Some(existing) = tasks.remove(&req_id) {
+            existing.handle.abort();
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
 
     let req_body = OllamaGenerateRequest {
-        model: MODEL_NAME.to_string(),
+        model: get_model_name(),
         prompt,
         stream: true,
     };
 
-    let req_id = params.request_id.clone();
+    let tasks_clone = state.tasks.clone();
+    let req_id_clone = req_id.clone();
     
-    tauri::async_runtime::spawn(async move {
-        match client.post(format!("{}/api/generate", OLLAMA_URL)).json(&req_body).send().await {
+    // Lock BEFORE spawning to prevent the task from cleaning up before insertion is done
+    let mut tasks_lock = state.tasks.lock().await;
+    
+    let handle = tauri::async_runtime::spawn(async move {
+        let mut buffer: Vec<u8> = Vec::new();
+        match client.post(format!("{}/api/generate", ollama_url)).json(&req_body).send().await {
             Ok(mut res) => {
-                while let Ok(Some(chunk)) = res.chunk().await {
-                    if let Ok(text) = String::from_utf8(chunk.to_vec()) {
-                        for line in text.lines() {
-                            if line.trim().is_empty() { continue; }
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                                if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
-                                    let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                    let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                        "request_id": &req_id,
-                                        "text": resp_text,
-                                        "done": is_done
-                                    }));
+                loop {
+                    match res.chunk().await {
+                        Ok(Some(chunk)) => {
+                            buffer.extend_from_slice(&chunk);
+                            
+                            while let Some(idx) = buffer.iter().position(|&b| b == b'\n') {
+                                let line = buffer.drain(..=idx).collect::<Vec<u8>>();
+                                if line.trim_ascii().is_empty() { continue; }
+                                
+                                match serde_json::from_slice::<serde_json::Value>(&line) {
+                                    Ok(json) => {
+                                        if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
+                                            let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                                "request_id": &req_id_clone,
+                                                "text": resp_text,
+                                                "done": is_done
+                                            }));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = window.emit("ai-stream-error", serde_json::json!({
+                                            "request_id": &req_id_clone,
+                                            "error": format!("Lỗi parse JSON: {}", e)
+                                        }));
+                                    }
                                 }
                             }
+                        }
+                        Ok(None) => {
+                            // End of stream
+                            if !buffer.trim_ascii().is_empty() {
+                                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&buffer) {
+                                    if let Some(resp_text) = json.get("response").and_then(|v| v.as_str()) {
+                                        let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                            "request_id": &req_id_clone,
+                                            "text": resp_text,
+                                            "done": is_done
+                                        }));
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        Err(e) => {
+                            let _ = window.emit("ai-stream-error", serde_json::json!({
+                                "request_id": &req_id_clone,
+                                "error": format!("Lỗi đọc dữ liệu mạng: {}", e)
+                            }));
+                            break;
                         }
                     }
                 }
             }
             Err(e) => {
                 let _ = window.emit("ai-stream-error", serde_json::json!({
-                    "request_id": &req_id,
-                    "error": format!("Lỗi stream: {}", e)
+                    "request_id": &req_id_clone,
+                    "error": format!("Lỗi gọi API: {}", e)
                 }));
             }
         }
+
+        // Cleanup after task is fully complete
+        let mut tasks = tasks_clone.lock().await;
+        if let Some(entry) = tasks.get(&req_id_clone) {
+            if entry.generation == generation {
+                tasks.remove(&req_id_clone);
+            }
+        }
+    });
+
+    tasks_lock.insert(req_id, crate::ai_task_manager::AiTaskEntry {
+        generation,
+        handle,
     });
     
     Ok(())
@@ -323,9 +420,15 @@ pub async fn ai_stream(window: tauri::Window, prompt: String, params: AiGenerate
 
 /// Cancels an ongoing generation request
 #[command]
-pub async fn ai_stop(request_id: String) -> Result<(), String> {
-    // TODO: Implement cancellation logic (e.g., dropping the Future or sending cancel signal)
-    println!("Cancelled request_id: {}", request_id);
+pub async fn ai_stop(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, request_id: String) -> Result<(), String> {
+    let entry_handle = {
+        let mut tasks = state.tasks.lock().await;
+        tasks.remove(&request_id)
+    }; // Lock is dropped here
+
+    if let Some(entry) = entry_handle {
+        entry.handle.abort();
+    }
     Ok(())
 }
 

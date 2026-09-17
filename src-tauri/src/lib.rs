@@ -6,6 +6,7 @@
 
 pub mod commands;
 pub mod mouse_tracker;
+pub mod ai_task_manager;
 mod system;
 mod window_manager;
 
@@ -37,6 +38,9 @@ pub fn run() {
 
             // Store in Tauri's managed state so commands can access it
             app.manage(interaction_state.clone());
+
+            // Phase 7: AI Task Manager
+            app.manage(ai_task_manager::AiTaskManager::new());
 
             // Position window at top-center of screen
             window_manager::center_window_at_top(app.handle());

@@ -283,7 +283,12 @@ fn do_hit_test(
             let rel_y = (cursor_phys_y - win_pos.y) as f64 / scale;
             let rel_x = (cursor_phys_x - win_pos.x) as f64 / scale;
             let logical_w = win_size.width as f64 / scale;
-            !(rel_x >= 0.0 && rel_x <= logical_w && rel_y >= 0.0 && rel_y <= 96.0)
+            
+            let bar_w = 480.0;
+            let bar_h = 96.0;
+            let bar_x = (logical_w - bar_w) / 2.0;
+            
+            !(rel_x >= bar_x && rel_x <= bar_x + bar_w && rel_y >= 0.0 && rel_y <= bar_h)
         }
         InteractionMode::Dragging => false,
         InteractionMode::Radial => {

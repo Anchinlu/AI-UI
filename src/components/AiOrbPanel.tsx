@@ -30,11 +30,11 @@ export type AiState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
 export function AiOrbPanel({ 
   isRadialOpen,
-  setIsInputOpen,
+  onOrbClick,
   aiState
 }: { 
   isRadialOpen?: boolean;
-  setIsInputOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  onOrbClick?: () => void;
   aiState: AiState;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -53,9 +53,9 @@ export function AiOrbPanel({
   const handleOrbClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isRadialOpen) return;
-
-    if (setIsInputOpen) {
-      setIsInputOpen(prev => !prev);
+    
+    if (onOrbClick) {
+      onOrbClick();
     }
   };
 

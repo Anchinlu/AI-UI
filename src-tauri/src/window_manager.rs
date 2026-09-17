@@ -13,28 +13,18 @@ pub fn center_window_at_top(app_handle: &AppHandle) {
         if let Ok(Some(monitor)) = window.primary_monitor() {
             let monitor_size = monitor.size();
             let monitor_position = monitor.position();
-            let scale_factor = window.scale_factor().unwrap_or(1.0);
 
-            // Window size in physical pixels
-            let window_width_physical = 480.0 * scale_factor;
-
-            // Center horizontally on the primary monitor
-            let x = monitor_position.x as f64
-                + (monitor_size.width as f64 - window_width_physical) / 2.0;
-            let y = monitor_position.y as f64;
-
-            // Use PhysicalPosition for pixel-perfect placement
-            let pos = tauri::PhysicalPosition::new(x as i32, y as i32);
-            let _ = window.set_position(pos);
+            // Set window size to match the entire monitor for safe hit-testing
+            let _ = window.set_size(*monitor_size);
+            let _ = window.set_position(*monitor_position);
             let _ = window.show();
 
             log::info!(
-                "Window centered at physical ({}, {}), monitor: {}x{}, scale: {:.2}",
-                x as i32,
-                y as i32,
+                "Window expanded to full monitor bounds ({}, {}) {}x{}",
+                monitor_position.x,
+                monitor_position.y,
                 monitor_size.width,
-                monitor_size.height,
-                scale_factor
+                monitor_size.height
             );
         } else {
             // Fallback: just show the window
