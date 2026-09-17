@@ -1061,7 +1061,6 @@ export function TaskbarShell() {
                   onChange={e => setPrompt(e.target.value)}
                   onKeyDown={handleAiKeyDown}
                   autoFocus
-                  disabled={aiState === 'thinking' || aiState === 'speaking'}
                   style={{ flex: 1 }}
                 />
                 {committedMessages.length > 0 && (

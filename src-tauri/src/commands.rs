@@ -221,6 +221,10 @@ struct OllamaChatOptions {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     num_predict: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u32>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -241,21 +245,63 @@ struct OllamaChatResponse {
     message: OllamaChatResponseMessage,
 }
 
-/// Validates message roles and prepends a neutral system message.
-fn build_ollama_messages(history: Vec<AiChatMessage>) -> Result<Vec<AiChatMessage>, String> {
-    for msg in &history {
-        if msg.role != "user" && msg.role != "assistant" {
-            return Err(format!("Role không hợp lệ: '{}'. Chỉ chấp nhận 'user' hoặc 'assistant'.", msg.role));
+fn get_effective_config(app: &tauri::AppHandle, params: &AiGenerateParams) -> Result<crate::generation::GenerationConfig, String> {
+    let base_config = match crate::generation::load_generation_config(app) {
+        Ok(c) => c,
+        Err(e) => {
+            if e == "NotFound" {
+                crate::generation::fallback_default_generation()
+            } else {
+                return Err(format!("Lỗi cấu hình Generation: {}", e));
+            }
         }
+    };
+
+    crate::generation::merge_with_params(
+        base_config,
+        params.temperature,
+        params.max_tokens,
+    )
+}
+
+fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>, params: &AiGenerateParams) -> Result<(Vec<AiChatMessage>, OllamaChatOptions), String> {
+    // 1. Get effective generation config
+    let config = get_effective_config(app, params)?;
+
+    // 2. Get system message
+    let system_content = match crate::persona::load_persona(app) {
+        Ok(persona_config) => crate::persona::build_system_message(&persona_config),
+        Err(e) => {
+            if e == "NotFound" {
+                crate::persona::fallback_neutral_persona()
+            } else {
+                return Err(format!("Lỗi cấu hình Persona: {}", e));
+            }
+        }
+    };
+    let system_msg = AiChatMessage {
+        role: "system".to_string(),
+        content: system_content,
+    };
+
+    // 3. Trim history
+    let (trimmed_messages, estimated, dropped) = crate::context_budget::trim_history(system_msg, history, &config)?;
+    
+    if dropped > 0 {
+        log::warn!("Context Budget: Đã cắt {} cặp hội thoại cũ. Ước lượng token: {}", dropped, estimated);
+    } else {
+        log::info!("Context Budget: Không cắt cặp hội thoại nào. Ước lượng token: {}", estimated);
     }
-    let mut messages = vec![
-        AiChatMessage {
-            role: "system".to_string(),
-            content: "You are a helpful assistant.".to_string(),
-        },
-    ];
-    messages.extend(history);
-    Ok(messages)
+
+    // 4. Build options
+    let options = OllamaChatOptions {
+        temperature: Some(config.temperature),
+        num_predict: Some(config.num_predict),
+        repeat_penalty: Some(config.repeat_penalty),
+        num_ctx: Some(config.num_ctx),
+    };
+
+    Ok((trimmed_messages, options))
 }
 
 /// Checks the status of the local AI server
@@ -298,9 +344,9 @@ pub async fn ai_get_status(state: tauri::State<'_, crate::ai_task_manager::AiTas
 
 /// Generates a complete text response (blocking until done)
 #[command]
-pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, messages: Vec<AiChatMessage>, params: AiGenerateParams) -> Result<String, String> {
+pub async fn ai_generate(app: tauri::AppHandle, state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, messages: Vec<AiChatMessage>, params: AiGenerateParams) -> Result<String, String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
-    let ollama_messages = build_ollama_messages(messages)?;
+    let (ollama_messages, ollama_options) = build_ollama_request_data(&app, messages, &params)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -311,10 +357,7 @@ pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskM
         model: get_model_name(),
         messages: ollama_messages,
         stream: false,
-        options: OllamaChatOptions {
-            temperature: params.temperature,
-            num_predict: params.max_tokens,
-        },
+        options: ollama_options,
     };
 
     let res = client.post(format!("{}/api/chat", ollama_url))
@@ -336,13 +379,14 @@ pub async fn ai_generate(state: tauri::State<'_, crate::ai_task_manager::AiTaskM
 
 #[command]
 pub async fn ai_stream(
+    app: tauri::AppHandle,
     window: tauri::Window, 
     state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, 
     messages: Vec<AiChatMessage>, 
     params: AiGenerateParams
 ) -> Result<(), String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
-    let ollama_messages = build_ollama_messages(messages)?;
+    let (ollama_messages, ollama_options) = build_ollama_request_data(&app, messages, &params)?;
     let req_id = params.request_id.clone();
 
     // Generate a new generation token for this request
@@ -369,10 +413,7 @@ pub async fn ai_stream(
         model: get_model_name(),
         messages: ollama_messages,
         stream: true,
-        options: OllamaChatOptions {
-            temperature: params.temperature,
-            num_predict: params.max_tokens,
-        },
+        options: ollama_options,
     };
 
     let tasks_clone = state.tasks.clone();

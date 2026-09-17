@@ -7,6 +7,9 @@
 pub mod commands;
 pub mod mouse_tracker;
 pub mod ai_task_manager;
+pub mod persona;
+pub mod generation;
+pub mod context_budget;
 mod system;
 mod window_manager;
 
