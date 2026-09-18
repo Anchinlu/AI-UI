@@ -264,16 +264,18 @@ fn get_effective_config(app: &tauri::AppHandle, params: &AiGenerateParams) -> Re
     )
 }
 
-fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>, params: &AiGenerateParams) -> Result<(Vec<AiChatMessage>, OllamaChatOptions), String> {
+fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>, params: &AiGenerateParams) -> Result<(Vec<AiChatMessage>, OllamaChatOptions, String), String> {
     // 1. Get effective generation config
     let config = get_effective_config(app, params)?;
 
     // 2. Get system message
-    let system_content = match crate::persona::load_persona(app) {
-        Ok(persona_config) => crate::persona::build_system_message(&persona_config),
+    let (system_content, prefix) = match crate::persona::load_persona(app) {
+        Ok(persona_config) => {
+            (crate::persona::build_system_message(&persona_config), persona_config.response_prefix)
+        },
         Err(e) => {
             if e == "NotFound" {
-                crate::persona::fallback_neutral_persona()
+                (crate::persona::fallback_neutral_persona(), String::new())
             } else {
                 return Err(format!("Lỗi cấu hình Persona: {}", e));
             }
@@ -301,7 +303,7 @@ fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>
         num_ctx: Some(config.num_ctx),
     };
 
-    Ok((trimmed_messages, options))
+    Ok((trimmed_messages, options, prefix))
 }
 
 /// Checks the status of the local AI server
@@ -346,7 +348,7 @@ pub async fn ai_get_status(state: tauri::State<'_, crate::ai_task_manager::AiTas
 #[command]
 pub async fn ai_generate(app: tauri::AppHandle, state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, messages: Vec<AiChatMessage>, params: AiGenerateParams) -> Result<String, String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
-    let (ollama_messages, ollama_options) = build_ollama_request_data(&app, messages, &params)?;
+    let (ollama_messages, ollama_options, prefix) = build_ollama_request_data(&app, messages, &params)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -374,7 +376,18 @@ pub async fn ai_generate(app: tauri::AppHandle, state: tauri::State<'_, crate::a
         .await
         .map_err(|e| format!("Lỗi parse kết quả JSON (expected message.content): {}", e))?;
 
-    Ok(chat_res.message.content)
+    let mut final_text = chat_res.message.content;
+    let target = prefix.trim();
+    if !target.is_empty() {
+        if final_text.trim_start().starts_with(target) {
+            final_text = final_text.trim_start()[target.len()..].trim_start().to_string();
+        }
+        if !final_text.is_empty() {
+            final_text = format!("{} {}", target, final_text);
+        }
+    }
+
+    Ok(final_text)
 }
 
 #[command]
@@ -386,7 +399,7 @@ pub async fn ai_stream(
     params: AiGenerateParams
 ) -> Result<(), String> {
     let ollama_url = get_valid_ollama_url(&state).await?;
-    let (ollama_messages, ollama_options) = build_ollama_request_data(&app, messages, &params)?;
+    let (ollama_messages, ollama_options, prefix) = build_ollama_request_data(&app, messages, &params)?;
     let req_id = params.request_id.clone();
 
     // Generate a new generation token for this request
@@ -424,6 +437,8 @@ pub async fn ai_stream(
     
     let handle = tauri::async_runtime::spawn(async move {
         let mut buffer: Vec<u8> = Vec::new();
+        let mut stripper = PrefixStripper::new(prefix);
+
         match client.post(format!("{}/api/chat", ollama_url)).json(&req_body).send().await {
             Ok(mut res) => {
                 if !res.status().is_success() {
@@ -451,11 +466,20 @@ pub async fn ai_stream(
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("");
                                         let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                            "request_id": &req_id_clone,
-                                            "text": content,
-                                            "done": is_done
-                                        }));
+                                        
+                                        if let Some(text) = stripper.process(content, is_done) {
+                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                                "request_id": &req_id_clone,
+                                                "text": text,
+                                                "done": is_done
+                                            }));
+                                        } else if is_done {
+                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                                "request_id": &req_id_clone,
+                                                "text": "",
+                                                "done": true
+                                            }));
+                                        }
                                     }
                                     Err(e) => {
                                         let _ = window.emit("ai-stream-error", serde_json::json!({
@@ -477,11 +501,20 @@ pub async fn ai_stream(
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("");
                                         let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                            "request_id": &req_id_clone,
-                                            "text": content,
-                                            "done": is_done
-                                        }));
+                                        
+                                        if let Some(text) = stripper.process(content, is_done) {
+                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                                "request_id": &req_id_clone,
+                                                "text": text,
+                                                "done": is_done
+                                            }));
+                                        } else if is_done {
+                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
+                                                "request_id": &req_id_clone,
+                                                "text": "",
+                                                "done": true
+                                            }));
+                                        }
                                     }
                                     Err(e) => {
                                         let _ = window.emit("ai-stream-error", serde_json::json!({
@@ -720,4 +753,144 @@ pub async fn execute_quick_action(action_id: String) -> Result<(), String> {
     Ok(())
 }
 
+struct PrefixStripper {
+    pub target_prefix: String,
+    pub generated_so_far: String,
+    pub state: u8, // 0: matching, 1: mismatched, 2: matched, 3: matched and trimming trailing spaces
+    pub has_emitted_prefix: bool,
+}
 
+impl PrefixStripper {
+    pub fn new(target_prefix: String) -> Self {
+        let state = if target_prefix.trim().is_empty() { 2 } else { 0 };
+        Self {
+            target_prefix: target_prefix.trim().to_string(),
+            generated_so_far: String::new(),
+            state,
+            has_emitted_prefix: false,
+        }
+    }
+
+    pub fn process(&mut self, text: &str, is_done: bool) -> Option<String> {
+        let mut emit_text = text;
+        if self.state == 3 {
+            emit_text = emit_text.trim_start();
+            if !emit_text.is_empty() {
+                self.state = 2; // finished trimming
+            }
+        }
+
+        if self.state == 2 || self.state == 1 {
+            if emit_text.is_empty() {
+                if is_done && self.state == 2 && !self.has_emitted_prefix {
+                    return self.prepend_prefix_if_needed("");
+                }
+                return None;
+            }
+            return self.prepend_prefix_if_needed(emit_text);
+        }
+
+        // state == 0
+        self.generated_so_far.push_str(text);
+        let trimmed = self.generated_so_far.trim_start();
+        
+        if self.target_prefix.starts_with(trimmed) {
+            if self.target_prefix == trimmed {
+                self.state = 3; // matched perfectly, now trim following spaces
+            }
+            
+            if is_done {
+                if trimmed.is_empty() {
+                    return None;
+                } else if self.state == 3 {
+                    return self.prepend_prefix_if_needed("");
+                } else {
+                    self.state = 1;
+                    let so_far = self.generated_so_far.clone();
+                    return self.prepend_prefix_if_needed(&so_far);
+                }
+            }
+            
+            None
+        } else if trimmed.starts_with(&self.target_prefix) {
+            self.state = 2; // already passed prefix and trimmed spaces
+            let remainder = &trimmed[self.target_prefix.len()..];
+            let remainder = remainder.trim_start().to_string();
+            if remainder.is_empty() && !is_done {
+                self.state = 3; // wait for next chunks to trim spaces
+                None
+            } else {
+                self.prepend_prefix_if_needed(&remainder)
+            }
+        } else {
+            self.state = 1;
+            let so_far = self.generated_so_far.clone();
+            self.prepend_prefix_if_needed(&so_far)
+        }
+    }
+
+    fn prepend_prefix_if_needed(&mut self, content: &str) -> Option<String> {
+        let mut out = String::new();
+        if !self.has_emitted_prefix && !self.target_prefix.is_empty() {
+            if !content.is_empty() {
+                out.push_str(&self.target_prefix);
+                out.push_str(" ");
+                self.has_emitted_prefix = true;
+            }
+        }
+        out.push_str(content);
+        if out.is_empty() { None } else { Some(out) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefix_stripper_perfect_match() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo cáo:", false), None); // exact match
+        assert_eq!(stripper.process("  Nội dung", true), Some("Báo cáo: Nội dung".to_string()));
+    }
+
+    #[test]
+    fn test_prefix_stripper_multi_chunk() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo ", false), None); // partial
+        assert_eq!(stripper.process("cáo:", false), None); // exact now
+        assert_eq!(stripper.process(" \n\n", false), None); // trailing spaces
+        assert_eq!(stripper.process("Nội dung", true), Some("Báo cáo: Nội dung".to_string()));
+    }
+
+    #[test]
+    fn test_prefix_stripper_mismatch() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo ", false), None); // partial
+        assert_eq!(stripper.process("đốm", true), Some("Báo cáo: Báo đốm".to_string()));
+    }
+
+    #[test]
+    fn test_prefix_stripper_no_content() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("", true), None);
+    }
+
+    #[test]
+    fn test_prefix_stripper_abrupt_end_partial() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo", true), Some("Báo cáo: Báo".to_string()));
+    }
+
+    #[test]
+    fn test_prefix_stripper_abrupt_end_perfect() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo cáo:", true), None);
+    }
+
+    #[test]
+    fn test_prefix_stripper_overshoot() {
+        let mut stripper = PrefixStripper::new("Báo cáo:".to_string());
+        assert_eq!(stripper.process("Báo cáo: Nội dung", true), Some("Báo cáo: Nội dung".to_string()));
+    }
+}

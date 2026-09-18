@@ -16,7 +16,7 @@ impl Default for GenerationConfig {
         Self {
             temperature: 0.2,
             repeat_penalty: 1.1,
-            num_ctx: 2048,
+            num_ctx: 4096,
             num_predict: 64,
         }
     }
@@ -49,14 +49,31 @@ pub fn fallback_default_generation() -> GenerationConfig {
     GenerationConfig::default()
 }
 
-/// Tìm đường dẫn generation theo thứ tự: biến môi trường -> thư mục config ứng dụng
+/// Tìm đường dẫn generation theo thứ tự:
+/// 1. Biến môi trường AI_TASKBAR_GENERATION_PATH
+/// 2. Thư mục config/ cạnh Cargo.toml (chỉ trong debug build)
+/// 3. app_config_dir() của Tauri (production)
 pub fn resolve_generation_path(app: &tauri::AppHandle) -> PathBuf {
+    // 1. Biến môi trường override
     if let Ok(path_str) = std::env::var("AI_TASKBAR_GENERATION_PATH") {
         let p = PathBuf::from(path_str);
         if p.exists() {
+            log::debug!("Generation source resolved: env var");
             return p;
         }
     }
+
+    // 2. Dev config (chỉ trong debug build, không chạy ở production)
+    #[cfg(debug_assertions)]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dev_path) = crate::persona::resolve_dev_config_path(&exe, "generation.json") {
+            log::debug!("Generation source resolved: dev config");
+            return dev_path;
+        }
+    }
+
+    // 3. Production: app_config_dir
+    log::debug!("Generation source resolved: app_config_dir");
     app.path()
         .app_config_dir()
         .unwrap_or_default()
@@ -110,7 +127,7 @@ mod tests {
         let config = GenerationConfig::default();
         assert_eq!(config.temperature, 0.2);
         assert_eq!(config.repeat_penalty, 1.1);
-        assert_eq!(config.num_ctx, 2048);
+        assert_eq!(config.num_ctx, 4096);
         assert_eq!(config.num_predict, 64);
         assert!(config.validate().is_ok());
     }
@@ -148,7 +165,7 @@ mod tests {
         let merged = merge_with_params(config, Some(0.8), Some(128)).unwrap();
         assert_eq!(merged.temperature, 0.8);
         assert_eq!(merged.num_predict, 128);
-        assert_eq!(merged.num_ctx, 2048); // field này giữ nguyên
+        assert_eq!(merged.num_ctx, 4096); // field này giữ nguyên
     }
 
     #[test]

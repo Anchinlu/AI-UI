@@ -159,11 +159,13 @@ export function TaskbarShell() {
         // Commit the turn to history
         if (pendingTurnRef.current && pendingTurnRef.current.requestId === request_id) {
           const pt = pendingTurnRef.current;
-          setCommittedMessages(prev => [
-            ...prev,
-            { id: crypto.randomUUID(), role: 'user' as ChatRole, content: pt.userContent },
-            { id: crypto.randomUUID(), role: 'assistant' as ChatRole, content: pt.assistantContent },
-          ]);
+          if (pt.assistantContent.trim() !== '') {
+            setCommittedMessages(prev => [
+              ...prev,
+              { id: crypto.randomUUID(), role: 'user' as ChatRole, content: pt.userContent },
+              { id: crypto.randomUUID(), role: 'assistant' as ChatRole, content: pt.assistantContent },
+            ]);
+          }
           pendingTurnRef.current = null;
           setStreamingText('');
         }
