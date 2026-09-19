@@ -10,6 +10,9 @@ pub mod ai_task_manager;
 pub mod persona;
 pub mod generation;
 pub mod context_budget;
+pub mod conversation_logger;
+pub mod settings;
+pub mod provider;
 mod system;
 mod window_manager;
 
@@ -45,6 +48,17 @@ pub fn run() {
             // Phase 7: AI Task Manager
             app.manage(ai_task_manager::AiTaskManager::new());
 
+            // Phase 9: Settings Manager
+            let app_config = settings::load_config(app.handle());
+            let app_config_state: settings::AppConfigState = Arc::new(tokio::sync::Mutex::new(app_config));
+            app.manage(app_config_state);
+
+            // Phase 6: Provider Registry
+            app.manage(provider::ProviderRegistry::new());
+
+            // Phase 8: Conversation Logger
+            app.manage(conversation_logger::new_session_log_state());
+
             // Position window at top-center of screen
             window_manager::center_window_at_top(app.handle());
 
@@ -65,6 +79,8 @@ pub fn run() {
             commands::update_interactive_zones,
             commands::expand_window,
             commands::shrink_window,
+            settings::get_config,
+            settings::set_model_config,
             commands::ai_get_status,
             commands::ai_generate,
             commands::ai_stream,
@@ -76,7 +92,8 @@ pub fn run() {
             commands::set_brightness,
             commands::get_connectivity_status,
             commands::launch_application,
-            commands::execute_quick_action
+            commands::execute_quick_action,
+            commands::append_conversation_turn
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

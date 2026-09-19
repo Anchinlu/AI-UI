@@ -1,0 +1,58 @@
+﻿[
+    {
+        "Timestamp":  "20260918_132510",
+        "Model":  "qwen2.5:3b",
+        "Url":  "http://127.0.0.1:11435",
+        "NumCtx":  4096,
+        "NumPredict":  64,
+        "HistoryLevel":  "0_Empty",
+        "MeasuredRuns":  5,
+        "EstimatedPromptTokens":  38,
+        "MedianTokensPerSec":  7.8973293037398591,
+        "MedianLatencyMs":  4942.8548,
+        "MedianPromptEvalCount":  29,
+        "MedianOllamaProcessRamMB":  44.18
+    },
+    {
+        "Timestamp":  "20260918_132510",
+        "Model":  "qwen2.5:3b",
+        "Url":  "http://127.0.0.1:11435",
+        "NumCtx":  4096,
+        "NumPredict":  64,
+        "HistoryLevel":  "1_Short",
+        "MeasuredRuns":  5,
+        "EstimatedPromptTokens":  126,
+        "MedianTokensPerSec":  7.0741353914351235,
+        "MedianLatencyMs":  9648.0027,
+        "MedianPromptEvalCount":  112,
+        "MedianOllamaProcessRamMB":  36.11
+    },
+    {
+        "Timestamp":  "20260918_132510",
+        "Model":  "qwen2.5:3b",
+        "Url":  "http://127.0.0.1:11435",
+        "NumCtx":  4096,
+        "NumPredict":  64,
+        "HistoryLevel":  "2_Medium",
+        "MeasuredRuns":  5,
+        "EstimatedPromptTokens":  2090,
+        "MedianTokensPerSec":  7.4668793449165474,
+        "MedianLatencyMs":  5542.4533,
+        "MedianPromptEvalCount":  1943,
+        "MedianOllamaProcessRamMB":  37.22
+    },
+    {
+        "Timestamp":  "20260918_132510",
+        "Model":  "qwen2.5:3b",
+        "Url":  "http://127.0.0.1:11435",
+        "NumCtx":  4096,
+        "NumPredict":  64,
+        "HistoryLevel":  "3_Long",
+        "MeasuredRuns":  5,
+        "EstimatedPromptTokens":  10854,
+        "MedianTokensPerSec":  5.7669123303870142,
+        "MedianLatencyMs":  10589.3123,
+        "MedianPromptEvalCount":  3885,
+        "MedianOllamaProcessRamMB":  22.49
+    }
+]

@@ -17,7 +17,7 @@ impl Default for GenerationConfig {
             temperature: 0.2,
             repeat_penalty: 1.1,
             num_ctx: 4096,
-            num_predict: 64,
+            num_predict: 1024,
         }
     }
 }
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(config.temperature, 0.2);
         assert_eq!(config.repeat_penalty, 1.1);
         assert_eq!(config.num_ctx, 4096);
-        assert_eq!(config.num_predict, 64);
+        assert_eq!(config.num_predict, 1024);
         assert!(config.validate().is_ok());
     }
 

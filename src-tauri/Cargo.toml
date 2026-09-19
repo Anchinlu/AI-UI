@@ -24,6 +24,7 @@ tauri-plugin-log = "2"
 chrono = "0.4"
 wmi = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["fs", "io-util"] }
 
 # Win32 API for global mouse tracking + audio control
 [target.'cfg(windows)'.dependencies]
@@ -33,6 +34,9 @@ windows = { version = "0.58", features = [
   "Win32_System_Power",
   "Win32_System_Com",
   "Win32_System_Variant",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_Security",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
   "Win32_Devices_FunctionDiscovery",
@@ -44,3 +48,7 @@ windows = { version = "0.58", features = [
   "Devices_Enumeration",
   "Networking_Connectivity",
 ] }
+
+[dev-dependencies]
+mockito = "1.7.2"
+tempfile = "3.27.0"

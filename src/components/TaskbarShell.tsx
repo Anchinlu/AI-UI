@@ -49,7 +49,7 @@ export function TaskbarShell() {
   type ChatRole = 'user' | 'assistant';
   type ConversationMessage = { id: string; role: ChatRole; content: string };
   const [committedMessages, setCommittedMessages] = useState<ConversationMessage[]>([]);
-  const pendingTurnRef = useRef<{ requestId: string; userContent: string; assistantContent: string } | null>(null);
+  const pendingTurnRef = useRef<{ requestId: string; userContent: string; assistantContent: string; startTime: number } | null>(null);
   const [streamingText, setStreamingText] = useState<string>('');
 
   useEffect(() => {
@@ -120,7 +120,7 @@ export function TaskbarShell() {
       ];
 
       // Set pending turn
-      pendingTurnRef.current = { requestId: reqId, userContent, assistantContent: '' };
+      pendingTurnRef.current = { requestId: reqId, userContent, assistantContent: '', startTime: performance.now() };
 
       setAiState('thinking');
       setErrorMsg(null);
@@ -165,6 +165,16 @@ export function TaskbarShell() {
               { id: crypto.randomUUID(), role: 'user' as ChatRole, content: pt.userContent },
               { id: crypto.randomUUID(), role: 'assistant' as ChatRole, content: pt.assistantContent },
             ]);
+
+            // Calculate duration in milliseconds
+            const durationMs = Math.round(performance.now() - pt.startTime);
+
+            // Giai đoạn 8: Log hội thoại vào markdown (fire-and-forget)
+            invoke('append_conversation_turn', {
+              userMessage: pt.userContent,
+              assistantMessage: pt.assistantContent,
+              durationMs,
+            }).catch(e => console.error("Lỗi log hội thoại:", e));
           }
           pendingTurnRef.current = null;
           setStreamingText('');
@@ -202,6 +212,80 @@ export function TaskbarShell() {
   const lastTimeRef = useRef(0);
   const orbitalsContainerRef = useRef<HTMLDivElement>(null);
   const nodesRef = useRef<(HTMLDivElement | null)[]>([]);
+
+  // === System Panel State (Mốc 3) ===
+  interface AppConfig {
+    model: string;
+    provider: string;
+  }
+  interface AiServerStatus {
+    backend: string;
+    model: string;
+    requested_model: string;
+    is_ready: boolean;
+    fallback: boolean;
+    reason: string | null;
+  }
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+  const [systemAiStatus, setSystemAiStatus] = useState<AiServerStatus | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  
+  const [toast, setToast] = useState<{ message: string; visible: boolean; id: number }>({ message: '', visible: false, id: 0 });
+
+  useEffect(() => {
+    const unlistenToast = listen('ai-model-resolved', (event: any) => {
+      const data = event.payload;
+      if (data.fallback) {
+        setToast({ 
+          message: `Model ${data.requested_model} không sẵn sàng. Đang dùng: ${data.effective_model}`, 
+          visible: true, 
+          id: Date.now() 
+        });
+        setTimeout(() => setToast(t => ({ ...t, visible: false })), 4000);
+      }
+    });
+    return () => {
+      unlistenToast.then(f => f());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedNode !== 5) return;
+    
+    const fetchConfig = async () => {
+      try {
+        setConfigError(null);
+        const cfg = await invoke<AppConfig>('get_config');
+        setAppConfig(cfg);
+        const st = await invoke<AiServerStatus>('ai_get_status');
+        setSystemAiStatus(st);
+      } catch (err) {
+        console.error('fetch system config failed:', err);
+        setConfigError(String(err));
+      }
+    };
+    fetchConfig();
+  }, [selectedNode]);
+
+  const handleModelChange = async (newModel: string) => {
+    try {
+      await invoke('set_model_config', { model: newModel });
+      setAppConfig(prev => prev ? { ...prev, model: newModel } : null);
+      
+      // Update effective model status
+      setTimeout(async () => {
+        try {
+          const st = await invoke<AiServerStatus>('ai_get_status');
+          setSystemAiStatus(st);
+        } catch (e) {
+          console.error(e);
+        }
+      }, 500);
+    } catch (err) {
+      console.error(err);
+      setConfigError(String(err));
+    }
+  };
 
   // === Audio state (component-level, not inside render fn) ===
   interface AudioStatus {
@@ -951,9 +1035,35 @@ export function TaskbarShell() {
       case 5: // System
         return (
           <div className="panel-controls">
+            {configError && (
+              <div className="control-row" style={{ color: '#EA4335', fontSize: '11px', lineHeight: 1.2 }}>
+                ⚠ {configError}
+              </div>
+            )}
+            <div className="control-row">
+              <label>AI Model</label>
+              <select 
+                value={appConfig?.model ?? ''} 
+                onChange={(e) => handleModelChange(e.target.value)}
+                style={{ flex: 2, maxWidth: '140px', textOverflow: 'ellipsis', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '2px 4px' }}
+              >
+                <option style={{color:'black'}} value="qwen2.5:1.5b">qwen2.5:1.5b</option>
+                <option style={{color:'black'}} value="qwen2.5:3b">qwen2.5:3b</option>
+              </select>
+            </div>
+            {systemAiStatus && (
+              <div className="control-row" style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px', marginBottom: '4px' }}>
+                <label>Running</label>
+                <span style={{ fontSize: '12px', color: systemAiStatus.fallback ? '#FBBC05' : '#34A853' }}>
+                  {systemAiStatus.model} {systemAiStatus.fallback ? '(Fallback)' : ''}
+                </span>
+              </div>
+            )}
             <div className="control-row"><span>Battery</span><span>85% (Charging)</span></div>
             <div className="control-row"><span>Power Mode</span><span>Balanced</span></div>
-            <button className="btn-full">Restart App</button>
+            <button className="btn-full" onClick={async () => {
+              await invoke('system_shutdown').catch(e => console.error(e));
+            }}>Restart App</button>
           </div>
         );
       default:
@@ -963,6 +1073,17 @@ export function TaskbarShell() {
 
   return (
     <div className="taskbar-shell">
+      {toast.visible && (
+        <div className="system-toast" style={{
+          position: 'absolute', top: '10px', left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(234, 67, 53, 0.95)', color: 'white', padding: '8px 16px',
+          borderRadius: '12px', fontSize: '13px', zIndex: 9999, pointerEvents: 'none',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', fontWeight: 500,
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          {toast.message}
+        </div>
+      )}
       <div 
         ref={barRef} 
         className={`taskbar-bar ${isRadialOpen ? 'radial-open-bg' : ''}`}

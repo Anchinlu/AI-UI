@@ -6,7 +6,6 @@
 //! Phase 3+: Will add get_system_time, setAiState, etc.
 
 use tauri::{command, AppHandle, Emitter, Manager};
-
 /// Placeholder command for future use.
 /// Returns the current phase for debugging purposes.
 #[command]
@@ -149,8 +148,11 @@ pub fn shrink_window(_window: tauri::Window) {
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct AiServerStatus {
     pub backend: String, // "llama.cpp" or "ollama"
-    pub model: String,
+    pub model: String,   // effective_model
+    pub requested_model: String,
     pub is_ready: bool,
+    pub fallback: bool,
+    pub reason: Option<String>,
     pub ram_usage: Option<u32>,
 }
 
@@ -162,52 +164,23 @@ pub struct AiGenerateParams {
     pub stream: Option<bool>,
 }
 
-fn get_model_name() -> String {
-    std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2.5:1.5b".to_string())
-}
-
-async fn get_valid_ollama_url(state: &tauri::State<'_, crate::ai_task_manager::AiTaskManager>) -> Result<String, String> {
-    {
-        let cached = state.active_url.lock().await;
-        if let Some(url) = &*cached {
-            return Ok(url.clone());
+async fn get_requested_model(config_state: &tauri::State<'_, crate::settings::AppConfigState>) -> String {
+    if let Ok(env_model) = std::env::var("OLLAMA_MODEL") {
+        if env_model == "qwen2.5:1.5b" || env_model == "qwen2.5:3b" {
+            return env_model;
+        } else {
+            log::warn!("OLLAMA_MODEL='{}' không hợp lệ. Bỏ qua và dùng config.", env_model);
         }
     }
-
-    let env_url = std::env::var("OLLAMA_URL").ok();
-    let ports = if let Some(url) = env_url {
-        vec![url]
-    } else {
-        vec!["http://127.0.0.1:11435".to_string(), "http://127.0.0.1:11434".to_string()]
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .map_err(|e| format!("Lỗi HTTP client: {}", e))?;
-
-    for url in ports {
-        if let Ok(res) = client.get(format!("{}/api/tags", url)).send().await {
-            if res.status().is_success() {
-                let mut cached = state.active_url.lock().await;
-                *cached = Some(url.clone());
-                return Ok(url);
-            }
-        }
-    }
-
-    Err("Không thể kết nối đến Ollama trên bất kỳ cổng nào (11435, 11434)".into())
+    let config = config_state.lock().await;
+    config.model.clone()
 }
 
-#[derive(serde::Deserialize)]
-struct OllamaTagResponse {
-    models: Vec<OllamaModel>,
-}
-
-#[derive(serde::Deserialize)]
-struct OllamaModel {
-    name: String,
-}
+// OllamaTagResponse, OllamaModel, OllamaChatRequest, OllamaChatOptions,
+// OllamaChatResponseMessage, OllamaChatResponse, and resolve_effective_model
+// have been removed. Their responsibilities now live in:
+//   crate::provider::ollama::OllamaProvider  (HTTP)
+//   crate::provider::policy::ModelPolicy     (model selection & fallback)
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct AiChatMessage {
@@ -215,35 +188,7 @@ pub struct AiChatMessage {
     pub content: String,
 }
 
-#[derive(serde::Serialize, Clone)]
-struct OllamaChatOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_predict: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    repeat_penalty: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_ctx: Option<u32>,
-}
 
-#[derive(serde::Serialize, Clone)]
-struct OllamaChatRequest {
-    model: String,
-    messages: Vec<AiChatMessage>,
-    stream: bool,
-    options: OllamaChatOptions,
-}
-
-#[derive(serde::Deserialize)]
-struct OllamaChatResponseMessage {
-    content: String,
-}
-
-#[derive(serde::Deserialize)]
-struct OllamaChatResponse {
-    message: OllamaChatResponseMessage,
-}
 
 fn get_effective_config(app: &tauri::AppHandle, params: &AiGenerateParams) -> Result<crate::generation::GenerationConfig, String> {
     let base_config = match crate::generation::load_generation_config(app) {
@@ -264,10 +209,11 @@ fn get_effective_config(app: &tauri::AppHandle, params: &AiGenerateParams) -> Re
     )
 }
 
-fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>, params: &AiGenerateParams) -> Result<(Vec<AiChatMessage>, OllamaChatOptions, String), String> {
-    // 1. Get effective generation config
-    let config = get_effective_config(app, params)?;
-
+fn build_chat_request_data(
+    app: &tauri::AppHandle,
+    history: Vec<AiChatMessage>,
+    config: crate::generation::GenerationConfig,
+) -> Result<(Vec<crate::provider::ChatMessage>, crate::provider::GenOptions, String), String> {
     // 2. Get system message
     let (system_content, prefix) = match crate::persona::load_persona(app) {
         Ok(persona_config) => {
@@ -281,102 +227,123 @@ fn build_ollama_request_data(app: &tauri::AppHandle, history: Vec<AiChatMessage>
             }
         }
     };
-    let system_msg = AiChatMessage {
+    let system_msg = crate::provider::ChatMessage {
         role: "system".to_string(),
         content: system_content,
     };
 
-    // 3. Trim history
-    let (trimmed_messages, estimated, dropped) = crate::context_budget::trim_history(system_msg, history, &config)?;
-    
+    // 3. Convert history to provider ChatMessage
+    let history_converted: Vec<crate::provider::ChatMessage> = history
+        .into_iter()
+        .map(|m| crate::provider::ChatMessage { role: m.role, content: m.content })
+        .collect();
+
+    // 4. Trim history (context budget)
+    let ai_system = AiChatMessage { role: system_msg.role.clone(), content: system_msg.content.clone() };
+    let ai_history: Vec<AiChatMessage> = history_converted.iter()
+        .map(|m| AiChatMessage { role: m.role.clone(), content: m.content.clone() })
+        .collect();
+    let (trimmed_ai, estimated, dropped) = crate::context_budget::trim_history(ai_system, ai_history, &config)?;
     if dropped > 0 {
         log::warn!("Context Budget: Đã cắt {} cặp hội thoại cũ. Ước lượng token: {}", dropped, estimated);
     } else {
         log::info!("Context Budget: Không cắt cặp hội thoại nào. Ước lượng token: {}", estimated);
     }
 
-    // 4. Build options
-    let options = OllamaChatOptions {
-        temperature: Some(config.temperature),
-        num_predict: Some(config.num_predict),
-        repeat_penalty: Some(config.repeat_penalty),
-        num_ctx: Some(config.num_ctx),
+    // 5. Convert trimmed messages back to provider::ChatMessage
+    let trimmed: Vec<crate::provider::ChatMessage> = trimmed_ai
+        .into_iter()
+        .map(|m| crate::provider::ChatMessage { role: m.role, content: m.content })
+        .collect();
+
+    // 6. Build GenOptions
+    let options = crate::provider::GenOptions {
+        temperature:    config.temperature,
+        num_predict:    config.num_predict,
+        repeat_penalty: config.repeat_penalty,
+        num_ctx:        config.num_ctx,
     };
 
-    Ok((trimmed_messages, options, prefix))
+    Ok((trimmed, options, prefix))
 }
 
 /// Checks the status of the local AI server
 #[command]
-pub async fn ai_get_status(state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>) -> Result<AiServerStatus, String> {
-    let ollama_url = get_valid_ollama_url(&state).await?;
+pub async fn ai_get_status(
+    _app: tauri::AppHandle,
+    registry: tauri::State<'_, crate::provider::ProviderRegistry>,
+    config_state: tauri::State<'_, crate::settings::AppConfigState>,
+) -> Result<AiServerStatus, String> {
+    let provider_name = {
+        let config = config_state.lock().await;
+        config.provider.clone()
+    };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
+    // Environment override for model
+    let requested_model = get_requested_model(&config_state).await;
 
-    let res = client.get(format!("{}/api/tags", ollama_url))
-        .send()
-        .await
-        .map_err(|e| format!("Server chưa chạy hoặc lỗi kết nối: {}", e))?;
-
-    if !res.status().is_success() {
-        return Err(format!("Lỗi HTTP từ Ollama: {}", res.status()));
-    }
-
-    let tags: OllamaTagResponse = res.json()
-        .await
-        .map_err(|e| format!("Không thể parse response: {}", e))?;
-
-    let model_name = get_model_name();
-    let is_ready = tags.models.iter().any(|m| m.name == model_name);
-
-    if !is_ready {
-        return Err(format!("Model '{}' chưa được tải.", model_name));
-    }
+    let provider = registry.get(&provider_name).await.map_err(|e| e.to_string())?;
+    let policy = crate::provider::policy::ModelPolicy::new(
+        requested_model.clone(), "qwen2.5:1.5b"
+    );
+    let resolved = policy.resolve(provider.as_ref()).await.map_err(|e| e.to_string())?;
 
     Ok(AiServerStatus {
-        backend: "ollama".into(),
-        model: model_name,
+        backend: provider.provider_name().to_string(),
+        model: resolved.effective_model,
+        requested_model,
         is_ready: true,
+        fallback: resolved.fallback,
+        reason: resolved.reason,
         ram_usage: None,
     })
 }
 
 /// Generates a complete text response (blocking until done)
 #[command]
-pub async fn ai_generate(app: tauri::AppHandle, state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, messages: Vec<AiChatMessage>, params: AiGenerateParams) -> Result<String, String> {
-    let ollama_url = get_valid_ollama_url(&state).await?;
-    let (ollama_messages, ollama_options, prefix) = build_ollama_request_data(&app, messages, &params)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
-
-    let req_body = OllamaChatRequest {
-        model: get_model_name(),
-        messages: ollama_messages,
-        stream: false,
-        options: ollama_options,
+pub async fn ai_generate(
+    app: tauri::AppHandle, 
+    registry: tauri::State<'_, crate::provider::ProviderRegistry>, 
+    config_state: tauri::State<'_, crate::settings::AppConfigState>,
+    messages: Vec<AiChatMessage>, 
+    params: AiGenerateParams
+) -> Result<String, String> {
+    let provider_name = {
+        let config = config_state.lock().await;
+        config.provider.clone()
     };
+    let requested_model = get_requested_model(&config_state).await;
 
-    let res = client.post(format!("{}/api/chat", ollama_url))
-        .json(&req_body)
-        .send()
-        .await
-        .map_err(|e| format!("Lỗi gọi Ollama API (timeout hoặc server down): {}", e))?;
+    let config = get_effective_config(&app, &params)?;
 
-    if !res.status().is_success() {
-        return Err(format!("Lỗi HTTP từ Ollama: {}", res.status()));
+    let provider = registry.get(&provider_name).await.map_err(|e| e.to_string())?;
+    let policy = crate::provider::policy::ModelPolicy::new(
+        requested_model.clone(), "qwen2.5:1.5b"
+    );
+    let resolved = policy.resolve(provider.as_ref()).await.map_err(|e| e.to_string())?;
+
+    if resolved.fallback {
+        use tauri::Emitter;
+        let _ = app.emit("ai-model-resolved", serde_json::json!({
+            "requested_model": &requested_model,
+            "effective_model": &resolved.effective_model,
+            "fallback": true,
+            "reason": &resolved.reason,
+        }));
     }
 
-    let chat_res: OllamaChatResponse = res.json()
-        .await
-        .map_err(|e| format!("Lỗi parse kết quả JSON (expected message.content): {}", e))?;
+    let (messages_out, options_out, prefix) = build_chat_request_data(&app, messages, config)?;
 
-    let mut final_text = chat_res.message.content;
+    let chat_request = crate::provider::ChatRequest {
+        model:      resolved.effective_model,
+        messages:   messages_out,
+        options:    options_out,
+        request_id: params.request_id.clone(),
+    };
+
+    let mut final_text = provider.chat(chat_request).await.map_err(|e| e.to_string())?;
+
+    // Apply prefix (same logic as before)
     let target = prefix.trim();
     if !target.is_empty() {
         if final_text.trim_start().starts_with(target) {
@@ -395,12 +362,43 @@ pub async fn ai_stream(
     app: tauri::AppHandle,
     window: tauri::Window, 
     state: tauri::State<'_, crate::ai_task_manager::AiTaskManager>, 
+    registry: tauri::State<'_, crate::provider::ProviderRegistry>, 
+    config_state: tauri::State<'_, crate::settings::AppConfigState>,
     messages: Vec<AiChatMessage>, 
     params: AiGenerateParams
 ) -> Result<(), String> {
-    let ollama_url = get_valid_ollama_url(&state).await?;
-    let (ollama_messages, ollama_options, prefix) = build_ollama_request_data(&app, messages, &params)?;
+    let provider_name = {
+        let config = config_state.lock().await;
+        config.provider.clone()
+    };
+    let requested_model = get_requested_model(&config_state).await;
+
+    let config = get_effective_config(&app, &params)?;
+
+    let provider = registry.get(&provider_name).await.map_err(|e| e.to_string())?;
+    let policy = crate::provider::policy::ModelPolicy::new(
+        requested_model.clone(), "qwen2.5:1.5b"
+    );
+    let resolved = policy.resolve(provider.as_ref()).await.map_err(|e| e.to_string())?;
+
+    if resolved.fallback {
+        let _ = window.emit("ai-model-resolved", serde_json::json!({
+            "requested_model": &requested_model,
+            "effective_model": &resolved.effective_model,
+            "fallback": true,
+            "reason": &resolved.reason,
+        }));
+    }
+
+    let (messages_out, options_out, prefix) = build_chat_request_data(&app, messages, config)?;
     let req_id = params.request_id.clone();
+
+    let chat_request = crate::provider::ChatRequest {
+        model:      resolved.effective_model,
+        messages:   messages_out,
+        options:    options_out,
+        request_id: req_id.clone(),
+    };
 
     // Generate a new generation token for this request
     let generation = {
@@ -417,135 +415,48 @@ pub async fn ai_stream(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Lỗi khởi tạo HTTP client: {}", e))?;
-
-    let req_body = OllamaChatRequest {
-        model: get_model_name(),
-        messages: ollama_messages,
-        stream: true,
-        options: ollama_options,
-    };
-
     let tasks_clone = state.tasks.clone();
     let req_id_clone = req_id.clone();
-    
+    let window_clone = window.clone();
+
     // Lock BEFORE spawning to prevent the task from cleaning up before insertion is done
     let mut tasks_lock = state.tasks.lock().await;
-    
-    let handle = tauri::async_runtime::spawn(async move {
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut stripper = PrefixStripper::new(prefix);
 
-        match client.post(format!("{}/api/chat", ollama_url)).json(&req_body).send().await {
-            Ok(mut res) => {
-                if !res.status().is_success() {
-                    let status = res.status();
-                    let body = res.text().await.unwrap_or_default();
-                    let _ = window.emit("ai-stream-error", serde_json::json!({
-                        "request_id": &req_id_clone,
-                        "error": format!("Lỗi HTTP từ Ollama: {} — {}", status, body)
-                    }));
-                } else {
-                loop {
-                    match res.chunk().await {
-                        Ok(Some(chunk)) => {
-                            buffer.extend_from_slice(&chunk);
-                            
-                            while let Some(idx) = buffer.iter().position(|&b| b == b'\n') {
-                                let line = buffer.drain(..=idx).collect::<Vec<u8>>();
-                                if line.trim_ascii().is_empty() { continue; }
-                                
-                                match serde_json::from_slice::<serde_json::Value>(&line) {
-                                    Ok(json) => {
-                                        let content = json
-                                            .get("message")
-                                            .and_then(|m| m.get("content"))
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        
-                                        if let Some(text) = stripper.process(content, is_done) {
-                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                                "request_id": &req_id_clone,
-                                                "text": text,
-                                                "done": is_done
-                                            }));
-                                        } else if is_done {
-                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                                "request_id": &req_id_clone,
-                                                "text": "",
-                                                "done": true
-                                            }));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = window.emit("ai-stream-error", serde_json::json!({
-                                            "request_id": &req_id_clone,
-                                            "error": format!("Lỗi parse JSON: {}", e)
-                                        }));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            // End of stream — parse any remaining buffer
-                            if !buffer.trim_ascii().is_empty() {
-                                match serde_json::from_slice::<serde_json::Value>(&buffer) {
-                                    Ok(json) => {
-                                        let content = json
-                                            .get("message")
-                                            .and_then(|m| m.get("content"))
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        let is_done = json.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        
-                                        if let Some(text) = stripper.process(content, is_done) {
-                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                                "request_id": &req_id_clone,
-                                                "text": text,
-                                                "done": is_done
-                                            }));
-                                        } else if is_done {
-                                            let _ = window.emit("ai-stream-chunk", serde_json::json!({
-                                                "request_id": &req_id_clone,
-                                                "text": "",
-                                                "done": true
-                                            }));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = window.emit("ai-stream-error", serde_json::json!({
-                                            "request_id": &req_id_clone,
-                                            "error": format!("Lỗi parse JSON buffer dư: {}", e)
-                                        }));
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        Err(e) => {
-                            let _ = window.emit("ai-stream-error", serde_json::json!({
-                                "request_id": &req_id_clone,
-                                "error": format!("Lỗi đọc dữ liệu mạng: {}", e)
-                            }));
-                            break;
-                        }
-                    }
-                }
-                } // end else (status ok)
+    let handle = tauri::async_runtime::spawn(async move {
+        let mut stripper = PrefixStripper::new(prefix);
+        let req_id_inner = req_id_clone.clone();
+
+        // Build on_chunk closure: applies prefix-stripping and emits events
+        let mut on_chunk = move |content: String, is_done: bool| {
+            if let Some(text) = stripper.process(&content, is_done) {
+                let _ = window_clone.emit("ai-stream-chunk", serde_json::json!({
+                    "request_id": &req_id_inner,
+                    "text": text,
+                    "done": is_done,
+                }));
+            } else if is_done {
+                // Stripper returned None but stream is done — emit done marker
+                // so frontend cleanup always fires (matches previous behaviour).
+                let _ = window_clone.emit("ai-stream-chunk", serde_json::json!({
+                    "request_id": &req_id_inner,
+                    "text": "",
+                    "done": true,
+                }));
             }
+        };
+
+        match provider.chat_stream(chat_request, &mut on_chunk).await {
+            Ok(()) => {}
             Err(e) => {
                 let _ = window.emit("ai-stream-error", serde_json::json!({
                     "request_id": &req_id_clone,
-                    "error": format!("Lỗi gọi API: {}", e)
+                    "error": e.to_string(),
                 }));
             }
         }
 
-        // Cleanup after task is fully complete
+        // Cleanup: remove task entry only if generation matches (avoids
+        // removing a newer request that was registered after this one started).
         let mut tasks = tasks_clone.lock().await;
         if let Some(entry) = tasks.get(&req_id_clone) {
             if entry.generation == generation {
@@ -558,9 +469,10 @@ pub async fn ai_stream(
         generation,
         handle,
     });
-    
+
     Ok(())
 }
+
 
 /// Cancels an ongoing generation request
 #[command]
@@ -573,6 +485,164 @@ pub async fn ai_stop(state: tauri::State<'_, crate::ai_task_manager::AiTaskManag
     if let Some(entry) = entry_handle {
         entry.handle.abort();
     }
+    Ok(())
+}
+
+// ==========================================
+// CONVERSATION LOGGER API (Giai đoạn 8)
+// ==========================================
+
+#[command]
+pub async fn append_conversation_turn(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::conversation_logger::SessionLogState>,
+    registry: tauri::State<'_, crate::provider::ProviderRegistry>,
+    config_state: tauri::State<'_, crate::settings::AppConfigState>,
+    user_message: String,
+    assistant_message: String,
+    duration_ms: Option<u64>,
+) -> Result<(), ()> {
+    use crate::conversation_logger::{SessionInfo, SessionMetadata, resolve_display_names, get_session_file_path, build_header};
+    use crate::persona::load_persona;
+    use crate::generation::load_generation_config;
+    use tokio::io::AsyncWriteExt;
+
+    // Resolve effective model using provider layer
+    let provider_name = {
+        let config = config_state.lock().await;
+        config.provider.clone()
+    };
+    let requested_model = get_requested_model(&config_state).await;
+    
+    let gen_config = load_generation_config(&app).unwrap_or_else(|_| crate::generation::GenerationConfig {
+        temperature: 0.7,
+        num_ctx: 4096,
+        repeat_penalty: 1.1,
+        num_predict: 1024,
+    });
+    
+    let effective_model = if let Ok(provider) = registry.get(&provider_name).await {
+        let policy = crate::provider::policy::ModelPolicy::new(
+            requested_model.clone(), "qwen2.5:1.5b"
+        );
+        match policy.resolve(provider.as_ref()).await {
+            Ok(r) => r.effective_model,
+            Err(_) => requested_model.clone(),
+        }
+    } else {
+        requested_model.clone()
+    };
+
+    // Load configs
+    let persona_config = load_persona(&app).unwrap_or_else(|_| crate::persona::PersonaConfig {
+        assistant_name: "".to_string(),
+        creator: "".to_string(),
+        creator_info: "".to_string(),
+        user_name: "".to_string(),
+        user_address: "".to_string(),
+        self_address: "".to_string(),
+        tone_instruction: "".to_string(),
+        response_prefix: "".to_string(),
+    });
+    
+    // (gen_config is already loaded above)
+
+    let current_meta = SessionMetadata {
+        persona_name: persona_config.assistant_name.clone(),
+        model: effective_model,
+        temperature: gen_config.temperature,
+        num_ctx: gen_config.num_ctx,
+        repeat_penalty: gen_config.repeat_penalty,
+    };
+
+    let (user_name, assistant_name) = resolve_display_names(&persona_config);
+    let time = chrono::Local::now();
+    let time_str = time.format("%H:%M:%S");
+
+    let duration_str = match duration_ms {
+        Some(ms) => format!("(⏱ {:.1}s)", ms as f64 / 1000.0),
+        None => String::new(),
+    };
+
+    let turn_content = format!(
+        "### [{}] {}\n{}\n\n### [{}] {} {}\n{}\n\n",
+        time_str, user_name, user_message,
+        time_str, assistant_name, duration_str, assistant_message
+    );
+
+    let mut session_lock = state.lock().await;
+
+    let path = match session_lock.as_mut() {
+        Some(session) => {
+            // Check meta changes
+            let mut prefix = String::new();
+            if session.metadata != current_meta {
+                if session.metadata.model != current_meta.model && 
+                   session.metadata.persona_name == current_meta.persona_name &&
+                   session.metadata.temperature == current_meta.temperature &&
+                   session.metadata.num_ctx == current_meta.num_ctx &&
+                   session.metadata.repeat_penalty == current_meta.repeat_penalty {
+                    // Only model changed
+                    prefix = format!(
+                        "> ⚠️ {} — Đổi model sang {}\n\n",
+                        time_str, current_meta.model
+                    );
+                } else {
+                    prefix = format!(
+                        "> ⚠️ {} — Cấu hình đã thay đổi: Persona={}, Model={}, T={}, ctx={}\n\n",
+                        time_str, current_meta.persona_name, current_meta.model, current_meta.temperature, current_meta.num_ctx
+                    );
+                }
+                session.metadata = current_meta;
+            }
+            let file_path = session.path.clone();
+            (file_path, format!("{}{}", prefix, turn_content))
+        }
+        None => {
+            // Khởi tạo file mới
+            if let Ok(app_data_dir) = app.path().app_data_dir() {
+                let logs_dir = app_data_dir.join("logs");
+                if let Err(e) = tokio::fs::create_dir_all(&logs_dir).await {
+                    log::error!("Không thể tạo thư mục logs: {}", e);
+                    return Ok(());
+                }
+                
+                let file_path = get_session_file_path(&logs_dir, &time);
+                let header = build_header(&time, &current_meta);
+                
+                *session_lock = Some(SessionInfo {
+                    path: file_path.clone(),
+                    metadata: current_meta,
+                });
+                
+                (file_path, format!("{}{}", header, turn_content))
+            } else {
+                log::error!("Không tìm thấy app_data_dir");
+                return Ok(());
+            }
+        }
+    };
+
+    // Ghi file (best-effort)
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path.0)
+        .await 
+    {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(path.1.as_bytes()).await {
+                log::error!("Lỗi ghi file log (write_all): {}", e);
+            }
+            if let Err(e) = file.flush().await {
+                log::error!("Lỗi flush file log: {}", e);
+            }
+        }
+        Err(e) => {
+            log::error!("Lỗi mở file log để ghi: {}", e);
+        }
+    }
+
     Ok(())
 }
 
