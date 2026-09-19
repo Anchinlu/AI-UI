@@ -1,5 +1,13 @@
 # run-thread-matrix.ps1
 # Script chạy benchmark ma trận luồng (threads) cho llama.cpp (Mốc H7-7)
+[CmdletBinding()]
+param (
+    [string]$llamaExe = "E:\UI AI\ai-taskbar\llama-cpp\llama-server.exe",
+    [string]$modelFile = "C:\Users\lctan\.ollama\models\blobs\sha256-183715c435899236895da3869489cc30ac241476b4971a20285b1a462818a5b4",
+    [string]$modelName = "qwen2.5:1.5b",
+    [string]$quantLevel = "Q4_K_M"
+)
+
 $ErrorActionPreference = "Stop"
 
 # Thư mục lưu kết quả
@@ -84,18 +92,14 @@ function Save-Summary {
 }
 
 # --- Cấu hình đo ---
-$modelName = "qwen2.5:1.5b"
-$quantLevel = "Q4_K_M"
-$modelFile = "C:\Users\lctan\.ollama\models\blobs\sha256-183715c435899236895da3869489cc30ac241476b4971a20285b1a462818a5b4"
-$modelHash = "sha256-183715c435899236895da3869489cc30ac241476b4971a20285b1a462818a5b4"
+$modelHash = Split-Path $modelFile -Leaf
+if ($modelHash -notmatch "^sha256") { $modelHash = "unknown" }
 
 $promptText = "Xin chào. Hãy giới thiệu ngắn gọn về chính bạn trong khoảng 50 từ."
 $temperature = 0.0
 $numCtx = 2048
 $numPredict = 64
 $repeatPenalty = 1.1
-
-$llamaExe = "E:\UI AI\ai-taskbar\llama-cpp\llama-server.exe"
 try {
     $llamaBinVer = (& cmd.exe /c "`"$llamaExe`" --version 2>&1") | Select-Object -First 1
     $llamaBinVer = $llamaBinVer -replace "`n", ""

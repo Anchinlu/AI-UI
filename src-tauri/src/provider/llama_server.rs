@@ -124,6 +124,26 @@ impl LlamaServerManager {
         }
     }
 
+    /// Tự động lấy số luồng tối ưu (Physical Cores - 2, fallback = 8)
+    fn get_optimal_threads() -> u32 {
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            if let Ok(output) = Command::new("wmic")
+                .args(&["cpu", "get", "NumberOfCores"])
+                .output()
+            {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                for line in out_str.lines().skip(1) {
+                    if let Ok(cores) = line.trim().parse::<u32>() {
+                        return if cores > 2 { cores - 2 } else { cores };
+                    }
+                }
+            }
+        }
+        8
+    }
+
     /// Lấy một port TCP trống trên 127.0.0.1
     fn get_free_port() -> std::io::Result<u16> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -140,14 +160,15 @@ impl LlamaServerManager {
         num_ctx: u32,
     ) -> Result<(Child, u32), std::io::Error> {
         let mut cmd = Command::new(exe_path);
+        let threads = Self::get_optimal_threads().to_string();
         
         cmd.args([
             "-m", model_path,
             "--port", &port.to_string(),
             "-ngl", "0",
             "-c", &num_ctx.to_string(),
-            "-t", "8",
-            "-tb", "8",
+            "-t", &threads,
+            "-tb", &threads,
         ]);
 
         // Hide console on Windows

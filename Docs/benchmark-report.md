@@ -64,6 +64,8 @@ Dữ liệu chuẩn hóa H7-6R đã khẳng định tính nhất quán với H7-
 
 ## Phụ lục: Mốc H7-7 - Tối ưu Thread CPU cho llama.cpp
 
+*(Ghi chú: Kết quả dưới đây là **preliminary (sơ bộ)** do ma trận hiện tại chỉ chạy 3 lượt warm runs mỗi cấu hình thay vì 5 lượt chuẩn. Chỉ dùng để nhận diện xu hướng overhead của CPU.)*
+
 Để xử lý hiện tượng "ăn CPU cực nhiều nhưng chạy chậm" của llama.cpp ở H7-6R, một **ma trận số luồng (Thread Matrix)** đã được chạy nghiệm thu.
 
 ### 1. Bảng kết quả Median theo cấu hình `-t`
@@ -83,5 +85,6 @@ Dữ liệu chuẩn hóa H7-6R đã khẳng định tính nhất quán với H7-
    - `-t 4` mang lại 10.75 TPS nhưng CPU Time chỉ tốn ~11 giây, bằng một phần ba so với việc không set flag (hoặc set 12 threads).
 
 ### 3. Đề xuất
-- Nếu buộc phải dùng llama.cpp trên Windows làm CPU backend (ví dụ: máy tính không cài được Ollama), cấu hình mặc định (fallback config) nên đặt cứng (hardcode) giới hạn luồng là `-t 8 -tb 8` (trên máy 10 core) hoặc tốt nhất là tự động `Physical Cores - 2`.
+- Ứng dụng sẽ tự động chọn cấu hình luồng lý tưởng bằng công thức `Auto = Physical Cores - 2` (Ví dụ: Máy 10 nhân vật lý sẽ dùng 8 luồng). Nếu không phát hiện được số nhân, fallback cấu hình về `8`.
+- Cấu hình này đã được cập nhật thành logic động trong Rust Backend thay vì hardcode.
 - So với Ollama (25.63 TPS), llama.cpp bản Windows thuần (ngay cả khi tối ưu thread) vẫn chỉ đạt tối đa ~14 TPS. Do đó, **Ollama vẫn là sự lựa chọn không thể thay thế** ở vai trò Production Default Provider lúc này.
