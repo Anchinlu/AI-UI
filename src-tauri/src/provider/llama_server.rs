@@ -146,6 +146,8 @@ impl LlamaServerManager {
             "--port", &port.to_string(),
             "-ngl", "0",
             "-c", &num_ctx.to_string(),
+            "-t", "8",
+            "-tb", "8",
         ]);
 
         // Hide console on Windows

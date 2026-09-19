@@ -1,0 +1,344 @@
+﻿{
+    "12":  {
+               "median_latency_ms":  2222.5,
+               "median_cpu_delta_ms":  22546.88,
+               "median_tps":  13.95,
+               "runs":  [
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  12,
+                                "run_type":  "cold",
+                                "run_index":  0,
+                                "tps":  14.08,
+                                "ttft":  0,
+                                "total_latency":  2200.95,
+                                "cpu":  22500,
+                                "ram":  1062.22,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  12,
+                                "run_type":  "warm",
+                                "run_index":  1,
+                                "tps":  13.95,
+                                "ttft":  0,
+                                "total_latency":  2222.5,
+                                "cpu":  22906.25,
+                                "ram":  1062.25,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  12,
+                                "run_type":  "warm",
+                                "run_index":  2,
+                                "tps":  13.59,
+                                "ttft":  0,
+                                "total_latency":  2280.53,
+                                "cpu":  22546.88,
+                                "ram":  1062.27,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  12,
+                                "run_type":  "warm",
+                                "run_index":  3,
+                                "tps":  14.51,
+                                "ttft":  0,
+                                "total_latency":  2136.56,
+                                "cpu":  20953.12,
+                                "ram":  1062.29,
+                                "status":  "OK"
+                            }
+                        ],
+               "threads":  12,
+               "median_ram_mb":  1062.27
+           },
+    "2":  {
+              "median_latency_ms":  3878.84,
+              "median_cpu_delta_ms":  7406.25,
+              "median_tps":  7.99,
+              "runs":  [
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  2,
+                               "run_type":  "cold",
+                               "run_index":  0,
+                               "tps":  6.81,
+                               "ttft":  0,
+                               "total_latency":  4551.56,
+                               "cpu":  8328.12,
+                               "ram":  1020.28,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  2,
+                               "run_type":  "warm",
+                               "run_index":  1,
+                               "tps":  7.57,
+                               "ttft":  0,
+                               "total_latency":  4094.71,
+                               "cpu":  7750,
+                               "ram":  1020.29,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  2,
+                               "run_type":  "warm",
+                               "run_index":  2,
+                               "tps":  7.99,
+                               "ttft":  0,
+                               "total_latency":  3878.84,
+                               "cpu":  7406.25,
+                               "ram":  1020.25,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  2,
+                               "run_type":  "warm",
+                               "run_index":  3,
+                               "tps":  8.32,
+                               "ttft":  0,
+                               "total_latency":  3727.38,
+                               "cpu":  7140.62,
+                               "ram":  1020.26,
+                               "status":  "OK"
+                           }
+                       ],
+              "threads":  2,
+              "median_ram_mb":  1020.26
+          },
+    "4":  {
+              "median_latency_ms":  2884.27,
+              "median_cpu_delta_ms":  11234.38,
+              "median_tps":  10.75,
+              "runs":  [
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  4,
+                               "run_type":  "cold",
+                               "run_index":  0,
+                               "tps":  10.59,
+                               "ttft":  0,
+                               "total_latency":  2928.51,
+                               "cpu":  10921.88,
+                               "ram":  1061.14,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  4,
+                               "run_type":  "warm",
+                               "run_index":  1,
+                               "tps":  10.75,
+                               "ttft":  0,
+                               "total_latency":  2884.27,
+                               "cpu":  11234.38,
+                               "ram":  1061.17,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  4,
+                               "run_type":  "warm",
+                               "run_index":  2,
+                               "tps":  10.77,
+                               "ttft":  0,
+                               "total_latency":  2877.61,
+                               "cpu":  11171.88,
+                               "ram":  1061.18,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  4,
+                               "run_type":  "warm",
+                               "run_index":  3,
+                               "tps":  10.42,
+                               "ttft":  0,
+                               "total_latency":  2975.35,
+                               "cpu":  11312.5,
+                               "ram":  1061.17,
+                               "status":  "OK"
+                           }
+                       ],
+              "threads":  4,
+              "median_ram_mb":  1061.17
+          },
+    "6":  {
+              "median_latency_ms":  2558.52,
+              "median_cpu_delta_ms":  14593.75,
+              "median_tps":  12.12,
+              "runs":  [
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  6,
+                               "run_type":  "cold",
+                               "run_index":  0,
+                               "tps":  11.85,
+                               "ttft":  0,
+                               "total_latency":  2616.7,
+                               "cpu":  14937.5,
+                               "ram":  1061.25,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  6,
+                               "run_type":  "warm",
+                               "run_index":  1,
+                               "tps":  12.31,
+                               "ttft":  0,
+                               "total_latency":  2517.8,
+                               "cpu":  14250,
+                               "ram":  1061.27,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  6,
+                               "run_type":  "warm",
+                               "run_index":  2,
+                               "tps":  11.84,
+                               "ttft":  0,
+                               "total_latency":  2617.65,
+                               "cpu":  14593.75,
+                               "ram":  1061.28,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  6,
+                               "run_type":  "warm",
+                               "run_index":  3,
+                               "tps":  12.12,
+                               "ttft":  0,
+                               "total_latency":  2558.52,
+                               "cpu":  14656.25,
+                               "ram":  1061.25,
+                               "status":  "OK"
+                           }
+                       ],
+              "threads":  6,
+              "median_ram_mb":  1061.27
+          },
+    "10":  {
+               "median_latency_ms":  2200.95,
+               "median_cpu_delta_ms":  20109.38,
+               "median_tps":  14.08,
+               "runs":  [
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  10,
+                                "run_type":  "cold",
+                                "run_index":  0,
+                                "tps":  13.8,
+                                "ttft":  0,
+                                "total_latency":  2245.73,
+                                "cpu":  20328.12,
+                                "ram":  1020.09,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  10,
+                                "run_type":  "warm",
+                                "run_index":  1,
+                                "tps":  14.08,
+                                "ttft":  0,
+                                "total_latency":  2200.95,
+                                "cpu":  20250,
+                                "ram":  1020.12,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  10,
+                                "run_type":  "warm",
+                                "run_index":  2,
+                                "tps":  14.37,
+                                "ttft":  0,
+                                "total_latency":  2156.87,
+                                "cpu":  20109.38,
+                                "ram":  1020.14,
+                                "status":  "OK"
+                            },
+                            {
+                                "backend":  "llamacpp",
+                                "threads":  10,
+                                "run_type":  "warm",
+                                "run_index":  3,
+                                "tps":  14.06,
+                                "ttft":  0,
+                                "total_latency":  2204.36,
+                                "cpu":  20109.38,
+                                "ram":  1020.15,
+                                "status":  "OK"
+                            }
+                        ],
+               "threads":  10,
+               "median_ram_mb":  1020.14
+           },
+    "8":  {
+              "median_latency_ms":  2311,
+              "median_cpu_delta_ms":  17562.5,
+              "median_tps":  13.41,
+              "runs":  [
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  8,
+                               "run_type":  "cold",
+                               "run_index":  0,
+                               "tps":  12.4,
+                               "ttft":  0,
+                               "total_latency":  2500.44,
+                               "cpu":  18125,
+                               "ram":  1062.28,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  8,
+                               "run_type":  "warm",
+                               "run_index":  1,
+                               "tps":  13.54,
+                               "ttft":  0,
+                               "total_latency":  2290.11,
+                               "cpu":  17218.75,
+                               "ram":  1062.28,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  8,
+                               "run_type":  "warm",
+                               "run_index":  2,
+                               "tps":  13.35,
+                               "ttft":  0,
+                               "total_latency":  2321.25,
+                               "cpu":  17562.5,
+                               "ram":  1062.29,
+                               "status":  "OK"
+                           },
+                           {
+                               "backend":  "llamacpp",
+                               "threads":  8,
+                               "run_type":  "warm",
+                               "run_index":  3,
+                               "tps":  13.41,
+                               "ttft":  0,
+                               "total_latency":  2311,
+                               "cpu":  17718.75,
+                               "ram":  1062.28,
+                               "status":  "OK"
+                           }
+                       ],
+              "threads":  8,
+              "median_ram_mb":  1062.28
+          }
+}
