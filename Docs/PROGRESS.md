@@ -13,10 +13,11 @@
 - [x] Hoàn tất 5 kịch bản kiểm thử Regression E2E (H7-5).
 
 ### Đang làm / tiếp theo
-- [ ] Chuyển sang mốc H7-6: Thực hiện Benchmark & So sánh hiệu năng giữa llama.cpp vs Ollama trên cùng một context.
+- [x] Chuyển sang mốc H7-6: Thực hiện Benchmark & So sánh hiệu năng giữa llama.cpp vs Ollama trên cùng một context.
 - [ ] Xây dựng tính năng UI cho phép người dùng cấu hình chọn Provider trong tương lai.
 
 ### Quyết định đã chốt (không hỏi lại)
 - Không lưu `llama-server.exe` vào cùng 1 repo (do lớn), tìm path thông qua `current_exe()` ở Prod hoặc fallback về `../llama-cpp/` ở Dev.
 - Provider fallback chỉ hỗ trợ fallback cục bộ của chính llama.cpp, không tự động fallback xuyên suốt từ llama.cpp sang Ollama (vì hai API khác biệt và người dùng đã cấu hình Provider trong config.json).
 - Llama-server chạy ẩn console thông qua `CREATE_NO_WINDOW` trên Windows.
+- **Provider mặc định**: Chốt sử dụng `Ollama` làm provider mặc định thay vì `llama.cpp` do Ollama đạt tốc độ sinh token trung vị cao gấp đôi (22.36 vs 11.94 TPS) và kiểm soát tài nguyên CPU tốt hơn trên cấu hình không có offload GPU.
