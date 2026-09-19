@@ -1,0 +1,1 @@
+﻿timestamp,backend,model,model_hash,quantization,binary_version,num_ctx,num_predict,temperature,repeat_penalty,run_type,run_index,prompt_tokens,generated_tokens,ttft_ms,total_latency_ms,generation_tokens_per_sec,process_id,process_cpu_time_ms,process_working_set_mb,status,error
