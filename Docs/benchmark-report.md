@@ -20,10 +20,10 @@
 
 | Tiêu chí | Ollama | llama.cpp |
 | --- | --- | --- |
-| **Median TPS (Tokens/sec)** | **24.44** | 7.49 |
-| **Median Latency (ms)** | **830.95** | 4141.00 |
-| **Median RAM (MB)** | Unavailable* | ~1006 MB |
-| **Median CPU Time (ms)** | Unavailable* | ~4000-5000 ms/run |
+| **Median TPS (Tokens/sec)** | **25.63** | 9.21 |
+| **Median Latency (ms)** | **786.89** | 3366.00 |
+| **Median RAM (MB)** | Unavailable* | ~1016 MB |
+| **Median CPU Time (ms)** | Unavailable* | ~30484 ms/run |
 
 *(Ghi chú: Lệnh `Get-Process` trên Windows không tìm thấy tiến trình con `ollama_llama_server` trong lúc gọi request, dẫn đến RAM/CPU của Ollama được đánh dấu Unavailable. Bài đo đối với Ollama tạm xem là **benchmark throughput-only**. llama.cpp đã được đo bằng CPU delta (trước/sau request).)*
 
@@ -32,20 +32,20 @@
 ### Ollama (CPU)
 | Lượt | TPS | TTFT (ms) | Total Latency (ms) | Status |
 | --- | --- | --- | --- | --- |
-| 1 | 18.45 | 86.26 | 1199.24 | OK |
-| 2 | 24.44 | 55.33 | 830.95 | OK |
-| 3 | 25.17 | 53.64 | 793.93 | OK |
-| 4 | 24.57 | 49.84 | 817.00 | OK |
-| 5 | 21.23 | 51.46 | 948.73 | OK |
+| 1 | 20.30 | 85.34 | 1089.03 | OK |
+| 2 | 25.63 | 52.88 | 786.89 | OK |
+| 3 | 25.40 | 50.15 | 800.70 | OK |
+| 4 | 23.36 | 49.33 | 855.90 | OK |
+| 5 | 27.53 | 49.96 | 733.91 | OK |
 
 ### llama.cpp (CPU `-ngl 0`)
-| Lượt | TPS | TTFT (ms) | Total Latency (ms) | RAM (MB) | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 7.49 | N/A | 4141.00 | 1014.42 | OK |
-| 2 | 7.14 | N/A | 4343.00 | 1014.45 | OK |
-| 3 | 5.99 | N/A | 5176.00 | 1006.45 | OK |
-| 4 | 8.25 | N/A | 3756.00 | 1006.50 | OK |
-| 5 | 8.18 | N/A | 3791.00 | 1006.54 | OK |
+| Lượt | TPS | TTFT (ms) | Total Latency (ms) | RAM (MB) | CPU Delta (ms) | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 11.90 | N/A | 2606.00 | 1016.22 | 14500.00 | OK |
+| 2 | 8.73 | N/A | 3550.00 | 1016.22 | 31640.62 | OK |
+| 3 | 7.98 | N/A | 3887.00 | 1016.22 | 33890.62 | OK |
+| 4 | 9.62 | N/A | 3222.00 | 1016.24 | 30062.50 | OK |
+| 5 | 9.21 | N/A | 3366.00 | 1016.27 | 30484.38 | OK |
 
 *(Ghi chú: llama.cpp OpenAI compat endpoint `/v1/chat/completions` không trả về `prompt_eval_duration` hay đối tượng `timings` trong response khi `stream=false` nếu không can thiệp sâu vào config, do đó TTFT hiển thị N/A và không được so sánh với Ollama).*
 
@@ -56,6 +56,6 @@
 
 ## 6. Kết luận tạm thời
 Dữ liệu chuẩn hóa H7-6R đã khẳng định tính nhất quán với H7-6 ban đầu:
-- **Ollama** có tốc độ nhả chữ (Median TPS ~24) vượt xa **llama.cpp** (Median TPS ~7-8) trên cùng thiết lập CPU.
-- `llama.cpp` bản CPU thuần có dấu hiệu phân bổ thread/luồng chưa tối ưu so với bản build của Ollama.
+- **Ollama** có tốc độ nhả chữ (Median TPS ~25) vượt xa **llama.cpp** (Median TPS ~9) trên cùng thiết lập CPU.
+- `llama.cpp` bản CPU thuần có dấu hiệu phân bổ thread/luồng chưa tối ưu so với bản build của Ollama. Mức tiêu thụ CPU time ở khoảng 30.000ms mỗi lượt chạy, cho thấy việc vắt kiệt luồng (threads) nhưng TPS không đạt kỳ vọng.
 - **Không tự ý thay đổi Provider mặc định.** Ứng dụng hiện vẫn dùng Ollama làm production backend. Sẽ xem xét tối ưu luồng cho llama.cpp ở Mốc H7-7.
